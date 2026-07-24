@@ -49,7 +49,7 @@ QLabel#successText {
     font-weight: 600;
 }
 
-QPushButton {
+QPushButton, QToolButton {
     min-height: 38px;
     padding: 0 15px;
     color: #24483e;
@@ -59,12 +59,12 @@ QPushButton {
     font-weight: 600;
 }
 
-QPushButton:hover {
+QPushButton:hover, QToolButton:hover {
     background: rgba(238, 249, 245, 245);
     border-color: rgba(65, 142, 120, 150);
 }
 
-QPushButton:pressed {
+QPushButton:pressed, QToolButton:pressed {
     background: rgba(220, 241, 233, 245);
 }
 
@@ -87,6 +87,12 @@ QPushButton[role="primary"]:hover {
 
 QPushButton[role="primary"]:pressed {
     background: #28785d;
+}
+
+QPushButton[role="primary"]:disabled {
+    color: #92a79f;
+    background: rgba(226, 239, 234, 225);
+    border-color: rgba(150, 178, 169, 75);
 }
 
 QPushButton[role="quiet"] {
@@ -203,3 +209,57 @@ QDialog {
     background: #eff8f4;
 }
 
+QPushButton[taskMode="true"] {
+    min-width: 96px;
+    border-radius: 6px;
+    background: rgba(248, 252, 250, 225);
+}
+
+QPushButton[taskMode="true"]:checked {
+    color: #ffffff;
+    background: #3d9a78;
+    border-color: #3d9a78;
+}
+
+QToolButton {
+    min-width: 98px;
+}
+
+QFrame#feedbackDropArea {
+    background: rgba(245, 251, 248, 220);
+    border: 1px dashed rgba(70, 145, 123, 155);
+    border-radius: 8px;
+}
+
+QFrame#feedbackDropArea:focus {
+    background: rgba(235, 248, 242, 235);
+    border-color: #3d9a78;
+}
+
+QLabel#dropTitle, QLabel#pendingFileName {
+    color: #214b40;
+    font-weight: 600;
+}
+
+QFrame#pendingFeedbackRow {
+    background: rgba(249, 253, 251, 220);
+    border: 1px solid rgba(121, 170, 155, 70);
+    border-radius: 7px;
+}
+
+QMenu {
+    color: #173a31;
+    background: #f8fcfa;
+    border: 1px solid rgba(111, 157, 144, 100);
+    padding: 5px;
+}
+
+QMenu::item {
+    min-width: 150px;
+    padding: 8px 14px;
+    border-radius: 5px;
+}
+
+QMenu::item:selected {
+    background: rgba(207, 237, 226, 220);
+}

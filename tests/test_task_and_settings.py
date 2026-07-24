@@ -3,6 +3,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QMessageBox
 
 from services import ProjectService, SettingsService, TaskService
 from ui.main_window import MainWindow
@@ -28,9 +29,7 @@ def test_empty_special_requirement_still_generates_task(tmp_path: Path) -> None:
     assert "任务类型：首次制作" in content
     assert "## 特殊要求\n\n无" in content
     assert "AGENT任务规则.md" in content
-    assert service.execution_prompt("项目1") == (
-        "请执行“项目1/当前任务.md”中的当前任务，并严格遵循根目录 AGENT任务规则.md。"
-    )
+    assert service.execution_prompt("项目1") == "执行项目1当前任务。"
 
 
 def test_recent_project_group_path_round_trip(tmp_path: Path) -> None:
@@ -64,3 +63,44 @@ def test_main_window_restores_recent_project_group(tmp_path: Path) -> None:
     window.close()
     app.processEvents()
 
+
+def test_main_window_refreshes_active_and_completed_lists_after_archive(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app = QApplication.instance() or QApplication([])
+    resource_root = Path(__file__).resolve().parents[1] / "resources"
+    sources: list[Path] = []
+    for index in range(1, 4):
+        source = tmp_path / f"source-{index}.json"
+        source.write_text(json.dumps({"index": index}), encoding="utf-8")
+        sources.append(source)
+    project_service = ProjectService(resource_root)
+    group = project_service.create_project_group("归档刷新", 3, tmp_path, sources)
+    project3 = group.projects[2]
+    (project3.path / "产品迭代" / "初始版本.html").write_text(
+        "product", encoding="utf-8"
+    )
+    settings = SettingsService(
+        QSettings(str(tmp_path / "archive.ini"), QSettings.Format.IniFormat)
+    )
+    window = MainWindow(project_service, TaskService(resource_root), settings)
+    window.load_project_group(group.root)
+    window.home_page.project_list.setCurrentRow(2)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    window.archive_current_project()
+
+    names = [
+        window.home_page.project_list.item(index).text()
+        for index in range(window.home_page.project_list.count())
+    ]
+    assert names == ["项目1", "项目2"]
+    window.show_completed_projects()
+    assert window.completed_page.project_list.count() == 1
+    assert window.completed_page.project_list.item(0).text() == "项目3"
+    window.close()
+    app.processEvents()

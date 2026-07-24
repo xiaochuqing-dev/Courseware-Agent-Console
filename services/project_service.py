@@ -176,8 +176,6 @@ class ProjectService:
                     ProjectEntry(index=int(match.group(1)), name=path.name, path=path)
                 )
         projects.sort(key=lambda item: item.index)
-        if not projects:
-            raise InvalidProjectGroupError("所选目录中没有“项目N”格式的项目文件夹。")
         return ProjectGroup(root=resolved_root, projects=tuple(projects))
 
     @staticmethod
@@ -191,4 +189,3 @@ class ProjectService:
             subprocess.Popen(["open", str(target)])
         else:
             subprocess.Popen(["xdg-open", str(target)])
-
