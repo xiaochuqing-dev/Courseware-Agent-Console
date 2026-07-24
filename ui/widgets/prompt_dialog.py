@@ -19,9 +19,10 @@ class PromptDialog(QDialog):
         prompt: str,
         parent: QWidget | None = None,
         copy_button_text: str = "复制 Prompt",
+        copy_text: str | None = None,
     ) -> None:
         super().__init__(parent)
-        self.prompt = prompt
+        self.prompt = prompt if copy_text is None else copy_text
         self.setWindowTitle(title)
         screen = parent.screen() if parent is not None else QGuiApplication.primaryScreen()
         available = screen.availableGeometry() if screen is not None else None
@@ -38,9 +39,9 @@ class PromptDialog(QDialog):
         heading.setWordWrap(True)
         layout.addWidget(heading)
 
-        editor = QPlainTextEdit(prompt)
-        editor.setReadOnly(True)
-        layout.addWidget(editor, 1)
+        self.editor = QPlainTextEdit(prompt)
+        self.editor.setReadOnly(True)
+        layout.addWidget(self.editor, 1)
 
         actions = QHBoxLayout()
         actions.addStretch()

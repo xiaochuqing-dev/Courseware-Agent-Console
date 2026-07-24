@@ -218,6 +218,7 @@ class CreateProjectPage(QWidget):
         for name, exists in self.project_service.public_tools_status().items():
             label = QLabel(f"{'✓' if exists else '缺失'}  {name}")
             label.setObjectName("successText" if exists else "errorBanner")
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
             self.tools_status_layout.addWidget(label)
 
     def _default_desktop_path(self) -> str:

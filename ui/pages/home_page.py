@@ -14,13 +14,11 @@ from PySide6.QtWidgets import (
     QLayout,
     QListWidget,
     QListWidgetItem,
-    QMenu,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QStackedWidget,
     QStyle,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -74,6 +72,7 @@ class HomePage(QWidget):
         self.group: ProjectGroup | None = None
         self.current_project: ProjectEntry | None = None
         self.pending_feedback: list[PendingFeedback] = []
+        self.current_task_content = ""
         self._prompt_dialog: PromptDialog | None = None
         self._build_ui()
         self.set_empty_state()
@@ -304,6 +303,9 @@ class HomePage(QWidget):
         round_layout.addWidget(round_label)
         self.feedback_round_combo = QComboBox()
         self.feedback_round_combo.setMinimumWidth(130)
+        self.feedback_round_combo.currentIndexChanged.connect(
+            self._update_task_mode_state
+        )
         round_layout.addWidget(self.feedback_round_combo)
         details_row.addWidget(self.round_widget)
         self.round_widget.hide()
@@ -317,22 +319,30 @@ class HomePage(QWidget):
         requirements_column.addWidget(requirements_label)
         self.requirements_input = QPlainTextEdit()
         self.requirements_input.setPlaceholderText("仅填写本次额外约束")
-        self.requirements_input.setMinimumHeight(92)
-        self.requirements_input.setMaximumHeight(118)
+        self.requirements_input.setMinimumHeight(78)
+        self.requirements_input.setMaximumHeight(92)
+        self.requirements_input.setMaximumWidth(760)
         requirements_column.addWidget(self.requirements_input)
-        task_body.addLayout(requirements_column, 1)
+        task_body.addLayout(requirements_column, 3)
 
-        preview_column = QVBoxLayout()
-        preview_label = QLabel("当前任务预览")
-        preview_label.setObjectName("fieldLabel")
-        preview_column.addWidget(preview_label)
-        self.task_preview = QPlainTextEdit()
-        self.task_preview.setReadOnly(True)
-        self.task_preview.setPlaceholderText("生成后在这里查看当前任务索引")
-        self.task_preview.setMinimumHeight(92)
-        self.task_preview.setMaximumHeight(118)
-        preview_column.addWidget(self.task_preview)
-        task_body.addLayout(preview_column, 1)
+        task_state_column = QVBoxLayout()
+        task_state_column.setSpacing(8)
+        task_state_label = QLabel("任务状态")
+        task_state_label.setObjectName("fieldLabel")
+        task_state_column.addWidget(task_state_label)
+        self.task_status_text = QLabel("尚未生成当前任务")
+        self.task_status_text.setObjectName("mutedText")
+        self.task_status_text.setWordWrap(True)
+        task_state_column.addWidget(self.task_status_text)
+        self.task_preview_button = QPushButton("查看当前任务")
+        self.task_preview_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
+        )
+        self.task_preview_button.clicked.connect(self._show_task_preview)
+        self.task_preview_button.setEnabled(False)
+        task_state_column.addWidget(self.task_preview_button)
+        task_state_column.addStretch()
+        task_body.addLayout(task_state_column, 1)
         task_layout.addLayout(task_body)
 
         self.feedback_task_hint = QLabel("当前项目还没有客户反馈，请先导入反馈。")
@@ -341,9 +351,6 @@ class HomePage(QWidget):
         task_layout.addWidget(self.feedback_task_hint)
 
         actions = FlowLayout(horizontal_spacing=8, vertical_spacing=8)
-        self.copy_prompt_button = QPushButton("复制提示词")
-        self.copy_prompt_button.clicked.connect(self._copy_prompt)
-        actions.addWidget(self.copy_prompt_button)
         self.open_project_button = QPushButton("打开项目文件夹")
         self.open_project_button.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon)
@@ -351,16 +358,20 @@ class HomePage(QWidget):
         self.open_project_button.clicked.connect(self._open_current_project)
         actions.addWidget(self.open_project_button)
 
-        more_button = QToolButton()
-        more_button.setText("更多操作")
-        more_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        more_menu = QMenu(more_button)
-        acceptance_action = more_menu.addAction("完整产品验收")
-        acceptance_action.triggered.connect(self._show_acceptance_prompt)
-        record_action = more_menu.addAction("打开项目记录")
-        record_action.triggered.connect(self._open_project_record)
-        more_button.setMenu(more_menu)
-        actions.addWidget(more_button)
+        self.acceptance_button = QPushButton("完整产品验收")
+        self.acceptance_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
+        )
+        self.acceptance_button.clicked.connect(self._show_acceptance_prompt)
+        actions.addWidget(self.acceptance_button)
+
+        self.record_button = QPushButton("打开项目记录")
+        self.record_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+        )
+        self.record_button.clicked.connect(self._open_project_record)
+        actions.addWidget(self.record_button)
+
         self.generate_button = QPushButton("生成当前任务")
         self.generate_button.setProperty("role", "primary")
         self.generate_button.clicked.connect(self._generate_task)
@@ -473,6 +484,7 @@ class HomePage(QWidget):
     def set_empty_state(self, message: str | None = None) -> None:
         self.group = None
         self.current_project = None
+        self.current_task_content = ""
         self.pending_feedback.clear()
         self._refresh_pending_list()
         self.project_list.clear()
@@ -490,8 +502,10 @@ class HomePage(QWidget):
             self.completed_button,
             self.workflow_button,
             self.archive_button,
-            self.copy_prompt_button,
             self.open_project_button,
+            self.task_preview_button,
+            self.acceptance_button,
+            self.record_button,
         ):
             widget.setEnabled(False)
         self.empty_title.setText("课件项目")
@@ -500,6 +514,8 @@ class HomePage(QWidget):
         self.empty_select_button.show()
         self.empty_completed_button.hide()
         self.content_stack.setCurrentIndex(0)
+        self.task_status_text.setText("尚未生成当前任务")
+        self._update_task_mode_state()
 
     def refresh_group(self) -> None:
         if not self.group:
@@ -534,7 +550,13 @@ class HomePage(QWidget):
     ) -> None:
         if not current or not self.group:
             self.current_project = None
+            self.current_task_content = ""
             self.archive_button.setEnabled(False)
+            self.task_preview_button.setEnabled(False)
+            self.acceptance_button.setEnabled(False)
+            self.record_button.setEnabled(False)
+            self.task_status_text.setText("尚未生成当前任务")
+            self._update_task_mode_state()
             return
         path = Path(current.data(Qt.ItemDataRole.UserRole))
         next_project = next(
@@ -550,6 +572,8 @@ class HomePage(QWidget):
         self.requirements_input.clear()
         self.archive_button.setEnabled(True)
         self.open_project_button.setEnabled(True)
+        self.acceptance_button.setEnabled(True)
+        self.record_button.setEnabled(True)
         self._refresh_project_state()
         self.project_selected.emit(self.group.root, next_project.name)
 
@@ -565,8 +589,10 @@ class HomePage(QWidget):
                 self.error_requested.emit(
                     f"无法读取当前任务：{task_path}\n请检查文件权限和编码。\n\n{exc}"
                 )
-        self.task_preview.setPlainText(task_content)
-        self.copy_prompt_button.setEnabled(bool(task_content.strip()))
+        self.current_task_content = task_content
+        has_task = bool(task_content.strip())
+        self.task_preview_button.setEnabled(has_task)
+        self.task_status_text.setText(self._task_status(task_content))
 
         latest_product = self.archive_service.latest_product(self.current_project.path)
         self.latest_product_label.setText(
@@ -594,12 +620,48 @@ class HomePage(QWidget):
         self.round_widget.setVisible(feedback_mode)
         no_rounds = self.feedback_round_combo.count() == 0
         self.feedback_task_hint.setVisible(feedback_mode and no_rounds)
-        self.generate_button.setEnabled(not feedback_mode or not no_rounds)
+        self.generate_button.setEnabled(
+            self.current_project is not None and (not feedback_mode or not no_rounds)
+        )
+        if self._task_matches_selected_mode():
+            self.generate_button.setText("重新生成任务")
+        elif feedback_mode:
+            self.generate_button.setText("生成反馈修改任务")
+        else:
+            self.generate_button.setText("生成当前任务")
+
+    def _task_matches_selected_mode(self) -> bool:
+        content = self.current_task_content
+        if not content.strip():
+            return False
+        if self.task_mode_group.checkedId() == 0:
+            return "任务类型：首次制作" in content
+        round_number = self.feedback_round_combo.currentData()
+        return (
+            round_number is not None
+            and "任务类型：反馈修改" in content
+            and f"反馈轮次：第{int(round_number)}轮" in content
+        )
+
+    @staticmethod
+    def _task_status(content: str) -> str:
+        if not content.strip():
+            return "尚未生成当前任务"
+        task_type = "反馈修改" if "任务类型：反馈修改" in content else "首次制作"
+        if task_type == "反馈修改":
+            round_line = next(
+                (line for line in content.splitlines() if line.startswith("反馈轮次：")),
+                "",
+            )
+            if round_line:
+                return f"已有任务：{task_type} · {round_line.removeprefix('反馈轮次：')}"
+        return f"已有任务：{task_type}"
 
     def _generate_task(self) -> None:
         if not self.current_project:
             self.error_requested.emit("请先选择项目。")
             return
+        regenerating = self._task_matches_selected_mode()
         try:
             if not self.group:
                 raise ValueError("当前项目组未加载。")
@@ -624,14 +686,20 @@ class HomePage(QWidget):
             self.error_requested.emit(f"生成当前任务失败：{exc}")
             return
         self._refresh_project_state()
-        self.toast_requested.emit("当前任务已生成")
+        self.toast_requested.emit("任务已重新生成" if regenerating else "当前任务已生成")
 
-    def _copy_prompt(self) -> None:
-        if not self.current_project:
+    def _show_task_preview(self) -> None:
+        if not self.current_project or not self.current_task_content.strip():
             return
         prompt = self.prompt_service.execution_prompt(self.current_project.name)
-        QGuiApplication.clipboard().setText(prompt)
-        self.toast_requested.emit("已复制")
+        self._prompt_dialog = PromptDialog(
+            "当前任务预览",
+            self.current_task_content,
+            self,
+            "复制提示词（可选）",
+            copy_text=prompt,
+        )
+        self._prompt_dialog.exec()
 
     def _show_acceptance_prompt(self) -> None:
         if not self.current_project:

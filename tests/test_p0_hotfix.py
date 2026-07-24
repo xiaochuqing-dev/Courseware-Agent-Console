@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
 from services import ProjectService, SettingsService, TaskService, ValidationError
@@ -195,6 +195,44 @@ def test_create_page_switch_is_constant_time_and_reuses_one_page(
 
     assert calls == 1
     assert len(window.create_page.findChildren(QWidget)) == child_widget_count
+    window.close()
+    app.processEvents()
+
+
+def test_hidden_create_page_flow_layout_does_not_cover_form_controls(
+    app: QApplication, resource_root: Path, tmp_path: Path
+) -> None:
+    settings = SettingsService(
+        QSettings(str(tmp_path / "layout.ini"), QSettings.Format.IniFormat)
+    )
+    window = MainWindow(
+        ProjectService(resource_root),
+        TaskService(resource_root),
+        settings,
+    )
+    window.resize(1864, 1232)
+    window.show()
+    window.show_create_page()
+    app.processEvents()
+
+    page = window.create_page
+    labels = [
+        page.tools_status_layout.itemAt(index).widget()
+        for index in range(page.tools_status_layout.count())
+    ]
+    assert all(label is not None for label in labels)
+    assert all(label.geometry().height() < 100 for label in labels if label)
+    assert len({label.geometry().topLeft() for label in labels if label}) == len(labels)
+
+    center = page.name_input.mapToGlobal(page.name_input.rect().center())
+    assert QApplication.widgetAt(center) is page.name_input
+    import_center = page.import_button.mapToGlobal(page.import_button.rect().center())
+    assert QApplication.widgetAt(import_center) is page.import_button
+    assert all(
+        label.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        for label in labels
+        if label
+    )
     window.close()
     app.processEvents()
 

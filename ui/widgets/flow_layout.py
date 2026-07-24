@@ -65,7 +65,9 @@ class FlowLayout(QLayout):
         line_height = 0
         for item in self._items:
             widget = item.widget()
-            if widget is not None and not widget.isVisible():
+            # Parent visibility must not suppress geometry calculation. These layouts
+            # are built while their stacked page is hidden, before the first switch.
+            if widget is not None and widget.isHidden():
                 continue
             item_size = item.sizeHint()
             next_x = x + item_size.width() + self._horizontal_spacing
