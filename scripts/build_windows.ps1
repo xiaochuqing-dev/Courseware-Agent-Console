@@ -9,9 +9,16 @@ if (-not $env:PROCESSOR_ARCHITECTURE) {
 
 $deploy = Get-Command pyside6-deploy -ErrorAction Stop
 Write-Host "Using $($deploy.Source)"
-& $deploy.Source -c "$projectRoot\pysidedeploy.spec" -f
-if ($LASTEXITCODE -ne 0) {
-    throw "pyside6-deploy failed with exit code $LASTEXITCODE"
+$localSpec = Join-Path $projectRoot "courseware-agent-deploy-$([guid]::NewGuid().ToString('N')).spec"
+Copy-Item -LiteralPath "$projectRoot\pysidedeploy.spec" -Destination $localSpec
+try {
+    & $deploy.Source -c $localSpec -f
+    if ($LASTEXITCODE -ne 0) {
+        throw "pyside6-deploy failed with exit code $LASTEXITCODE"
+    }
+}
+finally {
+    Remove-Item -LiteralPath $localSpec -ErrorAction SilentlyContinue
 }
 
 $executable = Get-ChildItem -LiteralPath "$projectRoot\dist" -Filter "CoursewareAgentConsole.exe" -Recurse | Select-Object -First 1

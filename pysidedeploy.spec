@@ -21,7 +21,7 @@ icon = resources/app.ico
 [python]
 
 # python path
-python_path = C:\Users\xiaochuqing\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe
+python_path = python
 
 # python packages to install
 packages = Nuitka==4.0

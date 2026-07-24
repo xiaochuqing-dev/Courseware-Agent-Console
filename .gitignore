@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 build/
 dist/
+deployment/
 *.spec
 !pysidedeploy.spec
-artifacts/_preview_data/
+artifacts/
