@@ -1,6 +1,6 @@
 # 课件 Agent 控制台
 
-Windows 桌面端规则自动化工具。当前已完成项目组创建、首次制作、客户反馈轮次、反馈修改任务、完整产品验收 Prompt、手动归档和已完成项目查看闭环。GUI 只执行确定性文件规则，不接入任何模型 API。
+Windows 桌面端规则自动化工具，当前版本 v1.0.0。已完成项目组创建、首次制作、多轮客户反馈、产品验收、手动归档、已完成项目查看及工作流优化 Prompt 闭环。GUI 只执行确定性文件规则，不接入任何模型 API。
 
 ## 运行环境
 
@@ -21,8 +21,14 @@ python -m pytest -q
 python app.py --smoke-test
 ```
 
-阶段二页面与真实两轮反馈模拟：
+阶段三完整回归与截图：
 
 ```powershell
-python scripts\capture_phase2_screens.py
+python scripts\capture_phase3_screens.py
+```
+
+构建 Windows standalone 版本：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows.ps1
 ```

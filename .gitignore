@@ -5,5 +5,5 @@ __pycache__/
 build/
 dist/
 *.spec
+!pysidedeploy.spec
 artifacts/_preview_data/
-

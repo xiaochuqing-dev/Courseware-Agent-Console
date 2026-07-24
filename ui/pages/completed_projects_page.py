@@ -10,13 +10,14 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QSplitter,
     QStyle,
     QVBoxLayout,
     QWidget,
 )
 
 from services import ArchiveService, ProjectService
-from ui.widgets import Card
+from ui.widgets import Card, ElidedLabel
 
 
 class CompletedProjectsPage(QWidget):
@@ -69,10 +70,10 @@ class CompletedProjectsPage(QWidget):
         header.addWidget(refresh_button)
         page_layout.addLayout(header)
 
-        content = QHBoxLayout()
-        content.setSpacing(18)
+        content = QSplitter(Qt.Orientation.Horizontal)
+        content.setChildrenCollapsible(False)
         list_card = Card()
-        list_card.setMinimumWidth(340)
+        list_card.setMinimumWidth(240)
         list_layout = QVBoxLayout(list_card)
         list_layout.setContentsMargins(22, 20, 22, 20)
         list_title = QLabel("归档项目")
@@ -82,7 +83,7 @@ class CompletedProjectsPage(QWidget):
         self.project_list.setObjectName("projectList")
         self.project_list.currentItemChanged.connect(self._on_project_selected)
         list_layout.addWidget(self.project_list, 1)
-        content.addWidget(list_card, 4)
+        content.addWidget(list_card)
 
         details_card = Card()
         details_layout = QVBoxLayout(details_card)
@@ -91,9 +92,8 @@ class CompletedProjectsPage(QWidget):
         self.project_name_label = QLabel("选择一个已完成项目")
         self.project_name_label.setObjectName("sectionTitle")
         details_layout.addWidget(self.project_name_label)
-        self.path_label = QLabel()
+        self.path_label = ElidedLabel()
         self.path_label.setObjectName("mutedText")
-        self.path_label.setWordWrap(True)
         self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         details_layout.addWidget(self.path_label)
         self.latest_product_label = QLabel("最新产品：无")
@@ -113,8 +113,10 @@ class CompletedProjectsPage(QWidget):
         self.open_record_button = QPushButton("打开项目记录")
         self.open_record_button.clicked.connect(self._open_record)
         details_layout.addWidget(self.open_record_button)
-        content.addWidget(details_card, 6)
-        page_layout.addLayout(content, 1)
+        content.addWidget(details_card)
+        content.setStretchFactor(0, 4)
+        content.setStretchFactor(1, 6)
+        page_layout.addWidget(content, 1)
         self._set_actions_enabled(False)
 
     def set_context(self, group_root: Path) -> None:
@@ -145,6 +147,7 @@ class CompletedProjectsPage(QWidget):
         for project in projects:
             item = QListWidgetItem(project.name)
             item.setData(Qt.ItemDataRole.UserRole, str(project))
+            item.setToolTip(str(project))
             self.project_list.addItem(item)
         if self.project_list.count():
             self.project_list.setCurrentRow(0)

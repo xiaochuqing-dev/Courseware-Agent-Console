@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from services import PendingFeedback
+from .elided_label import ElidedLabel
 
 
 class FeedbackDropArea(QFrame):
@@ -40,9 +41,11 @@ class FeedbackDropArea(QFrame):
         text_layout.setSpacing(2)
         title = QLabel("Ctrl+V 粘贴微信截图、文字或已复制文件")
         title.setObjectName("dropTitle")
+        title.setWordWrap(True)
         text_layout.addWidget(title)
         hint = QLabel("也可以从资源管理器拖入一个或多个具体文件")
         hint.setObjectName("mutedText")
+        hint.setWordWrap(True)
         text_layout.addWidget(hint)
         layout.addLayout(text_layout, 1)
 
@@ -98,13 +101,12 @@ class PendingFeedbackRow(QFrame):
 
         text_layout = QVBoxLayout()
         text_layout.setSpacing(1)
-        name = QLabel(feedback.name)
+        name = ElidedLabel(feedback.name)
         name.setObjectName("pendingFileName")
         text_layout.addWidget(name)
         detail = feedback.preview or self._kind_text(feedback)
-        preview = QLabel(detail)
+        preview = ElidedLabel(detail, mode=Qt.TextElideMode.ElideRight)
         preview.setObjectName("mutedText")
-        preview.setMaximumWidth(520)
         text_layout.addWidget(preview)
         layout.addLayout(text_layout, 1)
 

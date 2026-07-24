@@ -21,7 +21,12 @@ from services import (
     SettingsService,
     TaskService,
 )
-from ui.pages import CompletedProjectsPage, CreateProjectPage, HomePage
+from ui.pages import (
+    CompletedProjectsPage,
+    CreateProjectPage,
+    HomePage,
+    WorkflowOptimizationPage,
+)
 from ui.widgets import BackgroundWidget, Toast
 from ui.widgets.rules_editor_dialog import RulesEditorDialog
 
@@ -46,7 +51,7 @@ class MainWindow(QMainWindow):
             self.task_service.resource_root, self.archive_service
         )
         self.setWindowTitle("课件 Agent 控制台")
-        self.setMinimumSize(980, 680)
+        self.setMinimumSize(860, 560)
         self.resize(1240, 790)
 
         background = BackgroundWidget()
@@ -68,15 +73,22 @@ class MainWindow(QMainWindow):
         self.completed_page = CompletedProjectsPage(
             self.project_service, self.archive_service
         )
+        self.workflow_page = WorkflowOptimizationPage(
+            self.archive_service, self.prompt_service
+        )
         self.page_stack.addWidget(self.home_page)
         self.page_stack.addWidget(self.create_page)
         self.page_stack.addWidget(self.completed_page)
+        self.page_stack.addWidget(self.workflow_page)
 
         self.home_page.create_project_requested.connect(self.show_create_page)
         self.home_page.choose_group_requested.connect(self.choose_project_group)
         self.home_page.edit_rules_requested.connect(self.edit_rules)
         self.home_page.archive_requested.connect(self.archive_current_project)
         self.home_page.completed_projects_requested.connect(self.show_completed_projects)
+        self.home_page.workflow_optimization_requested.connect(
+            self.show_workflow_optimization
+        )
         self.home_page.toast_requested.connect(self.show_toast)
         self.home_page.error_requested.connect(self.show_error)
         self.create_page.cancelled.connect(self.show_home_page)
@@ -84,6 +96,9 @@ class MainWindow(QMainWindow):
         self.create_page.open_existing_requested.connect(self._open_existing_group)
         self.completed_page.back_requested.connect(self.show_home_page)
         self.completed_page.error_requested.connect(self.show_error)
+        self.workflow_page.back_requested.connect(self.show_home_page)
+        self.workflow_page.error_requested.connect(self.show_error)
+        self.workflow_page.toast_requested.connect(self.show_toast)
 
         self.toast = Toast(background)
         self._restore_recent_group()
@@ -102,6 +117,12 @@ class MainWindow(QMainWindow):
         self.completed_page.set_context(self.home_page.group.root)
         self.page_stack.setCurrentWidget(self.completed_page)
 
+    def show_workflow_optimization(self) -> None:
+        if not self.home_page.group:
+            return
+        self.workflow_page.set_context(self.home_page.group.root)
+        self.page_stack.setCurrentWidget(self.workflow_page)
+
     def choose_project_group(self) -> None:
         start = self.settings_service.recent_group_path()
         selected = QFileDialog.getExistingDirectory(
@@ -116,10 +137,32 @@ class MainWindow(QMainWindow):
         try:
             group = self.project_service.load_project_group(path)
         except InvalidProjectGroupError as exc:
-            self.show_error(str(exc))
-            return False
+            root = Path(path).expanduser().resolve()
+            rules_path = root / "AGENT任务规则.md"
+            if root.is_dir() and not rules_path.is_file():
+                answer = QMessageBox.question(
+                    self,
+                    "任务规则缺失",
+                    f"所选项目组缺少任务规则：\n{rules_path}\n\n"
+                    "是否从内置模板重新创建后继续加载？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel,
+                )
+                if answer == QMessageBox.StandardButton.Yes:
+                    try:
+                        self.task_service.restore_default_rules(root)
+                        group = self.project_service.load_project_group(root)
+                    except Exception as recovery_error:
+                        self.show_error(f"恢复任务规则失败：{recovery_error}")
+                        return False
+                else:
+                    return False
+            else:
+                self.show_error(str(exc))
+                return False
         self.home_page.set_group(group)
         self.completed_page.set_context(group.root)
+        self.workflow_page.set_context(group.root)
         if persist:
             self.settings_service.save_recent_group_path(group.root)
         self.show_home_page()
@@ -128,11 +171,31 @@ class MainWindow(QMainWindow):
     def edit_rules(self) -> None:
         if not self.home_page.group:
             return
-        dialog = RulesEditorDialog(
-            self.home_page.group.root,
-            self.task_service,
-            self,
-        )
+        rules_path = self.home_page.group.root / "AGENT任务规则.md"
+        if not rules_path.is_file():
+            answer = QMessageBox.question(
+                self,
+                "任务规则缺失",
+                f"任务规则文件不存在：\n{rules_path}\n\n是否从内置模板重新创建？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            try:
+                self.task_service.restore_default_rules(self.home_page.group.root)
+            except Exception as exc:
+                self.show_error(f"无法恢复默认任务规则：{exc}")
+                return
+        try:
+            dialog = RulesEditorDialog(
+                self.home_page.group.root,
+                self.task_service,
+                self,
+            )
+        except Exception as exc:
+            self.show_error(f"无法打开任务规则：{exc}")
+            return
         if dialog.exec():
             self.show_toast("任务规则已保存")
 
@@ -204,3 +267,5 @@ class MainWindow(QMainWindow):
                 self.home_page.refresh_current_project()
             elif self.page_stack.currentWidget() is self.completed_page:
                 self.completed_page.refresh()
+            elif self.page_stack.currentWidget() is self.workflow_page:
+                self.workflow_page.refresh()

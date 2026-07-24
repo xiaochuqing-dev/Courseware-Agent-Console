@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .prompt_service import PromptService
+from .resource_paths import bundled_resource_root
 
 
 class TaskService:
@@ -10,7 +11,7 @@ class TaskService:
         self.resource_root = (
             Path(resource_root)
             if resource_root
-            else Path(__file__).resolve().parents[1] / "resources"
+            else bundled_resource_root()
         )
         self.templates_root = self.resource_root / "prompt_templates"
 

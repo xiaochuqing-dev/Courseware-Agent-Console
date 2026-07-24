@@ -117,6 +117,12 @@ class FeedbackService:
             target = target_root / self.unique_name(
                 item.name, {path.name for path in target_root.iterdir()}
             )
+            if len(str(target.resolve())) >= 240:
+                errors.append(
+                    f"{item.name}：目标路径过长，请缩短项目组、轮次资料或文件名称。"
+                    f"目标路径：{target}"
+                )
+                continue
             temporary = target_root / f".{target.name}.saving-{uuid4().hex}"
             try:
                 if item.source_path is not None:

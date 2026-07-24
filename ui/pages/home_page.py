@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QListWidget,
     QListWidgetItem,
     QMenu,
@@ -33,7 +34,14 @@ from services import (
     PromptService,
     TaskService,
 )
-from ui.widgets import Card, FeedbackDropArea, PendingFeedbackRow, PromptDialog
+from ui.widgets import (
+    Card,
+    ElidedLabel,
+    FeedbackDropArea,
+    FlowLayout,
+    PendingFeedbackRow,
+    PromptDialog,
+)
 
 
 class HomePage(QWidget):
@@ -42,6 +50,7 @@ class HomePage(QWidget):
     edit_rules_requested = Signal()
     archive_requested = Signal()
     completed_projects_requested = Signal()
+    workflow_optimization_requested = Signal()
     toast_requested = Signal(str)
     error_requested = Signal(str)
 
@@ -70,11 +79,11 @@ class HomePage(QWidget):
 
     def _build_ui(self) -> None:
         root_layout = QHBoxLayout(self)
-        root_layout.setContentsMargins(26, 24, 26, 26)
-        root_layout.setSpacing(18)
+        root_layout.setContentsMargins(18, 18, 18, 20)
+        root_layout.setSpacing(14)
 
         sidebar = Card()
-        sidebar.setFixedWidth(224)
+        sidebar.setFixedWidth(206)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(15, 17, 15, 17)
         sidebar_layout.setSpacing(12)
@@ -82,6 +91,9 @@ class HomePage(QWidget):
         brand = QLabel("课件 Agent 控制台")
         brand.setObjectName("sectionTitle")
         sidebar_layout.addWidget(brand)
+        version_label = QLabel("v1.0.0")
+        version_label.setObjectName("versionText")
+        sidebar_layout.addWidget(version_label)
 
         create_button = QPushButton("创建项目")
         create_button.setProperty("role", "primary")
@@ -99,6 +111,13 @@ class HomePage(QWidget):
         self.project_list.setObjectName("projectList")
         self.project_list.currentItemChanged.connect(self._on_project_selected)
         sidebar_layout.addWidget(self.project_list, 1)
+
+        self.workflow_button = QPushButton("工作流优化")
+        self.workflow_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
+        )
+        self.workflow_button.clicked.connect(self.workflow_optimization_requested)
+        sidebar_layout.addWidget(self.workflow_button)
 
         self.completed_button = QPushButton("已完成项目")
         self.completed_button.setIcon(
@@ -124,8 +143,6 @@ class HomePage(QWidget):
         self.group_selector.setMinimumWidth(190)
         self.group_selector.activated.connect(self._group_selector_activated)
         top_row.addWidget(self.group_selector)
-        top_row.addStretch()
-
         self.refresh_button = QPushButton()
         self.refresh_button.setProperty("iconOnly", True)
         self.refresh_button.setIcon(
@@ -134,21 +151,25 @@ class HomePage(QWidget):
         self.refresh_button.setToolTip("刷新项目文件信息")
         self.refresh_button.clicked.connect(self.refresh_group)
         top_row.addWidget(self.refresh_button)
+        top_row.addStretch()
+        header_layout.addLayout(top_row)
 
+        header_actions = QHBoxLayout()
+        header_actions.addStretch()
         self.edit_rules_button = QPushButton("编辑任务规则")
         self.edit_rules_button.clicked.connect(self.edit_rules_requested)
-        top_row.addWidget(self.edit_rules_button)
+        header_actions.addWidget(self.edit_rules_button)
 
         self.archive_button = QPushButton("标记已完成 / 归档")
         self.archive_button.clicked.connect(self.archive_requested)
-        top_row.addWidget(self.archive_button)
-        header_layout.addLayout(top_row)
+        header_actions.addWidget(self.archive_button)
+        header_layout.addLayout(header_actions)
 
         path_row = QHBoxLayout()
         path_title = QLabel("根目录")
         path_title.setObjectName("fieldLabel")
         path_row.addWidget(path_title)
-        self.root_path_label = QLabel()
+        self.root_path_label = ElidedLabel()
         self.root_path_label.setObjectName("mutedText")
         self.root_path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         path_row.addWidget(self.root_path_label, 1)
@@ -182,18 +203,24 @@ class HomePage(QWidget):
         empty_layout.addStretch()
         self.content_stack.addWidget(empty_card)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
+        self.work_scroll = QScrollArea()
+        self.work_scroll.setWidgetResizable(True)
+        self.work_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         scroll_content = QWidget()
         scroll_content.setObjectName("page")
         work_layout = QVBoxLayout(scroll_content)
+        work_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
         work_layout.setContentsMargins(0, 0, 8, 4)
         work_layout.setSpacing(14)
-        work_layout.addWidget(self._build_task_card())
-        work_layout.addWidget(self._build_feedback_card())
+        self.task_card = self._build_task_card()
+        self.feedback_card = self._build_feedback_card()
+        work_layout.addWidget(self.task_card)
+        work_layout.addWidget(self.feedback_card)
         work_layout.addStretch()
-        scroll.setWidget(scroll_content)
-        self.content_stack.addWidget(scroll)
+        self.work_scroll.setWidget(scroll_content)
+        self.content_stack.addWidget(self.work_scroll)
         main_layout.addWidget(self.content_stack, 1)
         root_layout.addLayout(main_layout, 1)
 
@@ -208,7 +235,7 @@ class HomePage(QWidget):
         task_title.setObjectName("sectionTitle")
         title_row.addWidget(task_title)
         title_row.addStretch()
-        self.latest_product_label = QLabel("最新产品：无")
+        self.latest_product_label = ElidedLabel("最新产品：无")
         self.latest_product_label.setObjectName("mutedText")
         title_row.addWidget(self.latest_product_label)
         task_layout.addLayout(title_row)
@@ -290,7 +317,7 @@ class HomePage(QWidget):
         self.feedback_task_hint.hide()
         task_layout.addWidget(self.feedback_task_hint)
 
-        actions = QHBoxLayout()
+        actions = FlowLayout(horizontal_spacing=8, vertical_spacing=8)
         self.copy_prompt_button = QPushButton("复制提示词")
         self.copy_prompt_button.clicked.connect(self._copy_prompt)
         actions.addWidget(self.copy_prompt_button)
@@ -311,8 +338,6 @@ class HomePage(QWidget):
         record_action.triggered.connect(self._open_project_record)
         more_button.setMenu(more_menu)
         actions.addWidget(more_button)
-        actions.addStretch()
-
         self.generate_button = QPushButton("生成当前任务")
         self.generate_button.setProperty("role", "primary")
         self.generate_button.clicked.connect(self._generate_task)
@@ -351,11 +376,19 @@ class HomePage(QWidget):
         pending_header.addStretch()
         layout.addLayout(pending_header)
 
+        self.pending_scroll = QScrollArea()
+        self.pending_scroll.setWidgetResizable(True)
+        self.pending_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.pending_scroll.setMinimumHeight(58)
+        self.pending_scroll.setMaximumHeight(172)
         self.pending_container = QWidget()
         self.pending_layout = QVBoxLayout(self.pending_container)
         self.pending_layout.setContentsMargins(0, 0, 0, 0)
         self.pending_layout.setSpacing(5)
-        layout.addWidget(self.pending_container)
+        self.pending_scroll.setWidget(self.pending_container)
+        layout.addWidget(self.pending_scroll)
 
         self.pending_empty_label = QLabel("粘贴或拖入的资料会先显示在这里，不会立即写入项目。")
         self.pending_empty_label.setObjectName("mutedText")
@@ -390,6 +423,7 @@ class HomePage(QWidget):
             self.open_root_button,
             self.refresh_button,
             self.completed_button,
+            self.workflow_button,
         ):
             widget.setEnabled(True)
 
@@ -429,6 +463,7 @@ class HomePage(QWidget):
             self.open_root_button,
             self.refresh_button,
             self.completed_button,
+            self.workflow_button,
             self.archive_button,
             self.copy_prompt_button,
             self.open_project_button,
@@ -494,7 +529,12 @@ class HomePage(QWidget):
         task_path = self.current_project.path / "当前任务.md"
         task_content = ""
         if task_path.is_file():
-            task_content = task_path.read_text(encoding="utf-8")
+            try:
+                task_content = task_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                self.error_requested.emit(
+                    f"无法读取当前任务：{task_path}\n请检查文件权限和编码。\n\n{exc}"
+                )
         self.task_preview.setPlainText(task_content)
         self.copy_prompt_button.setEnabled(bool(task_content.strip()))
 
@@ -531,6 +571,11 @@ class HomePage(QWidget):
             self.error_requested.emit("请先选择项目。")
             return
         try:
+            if not self.group:
+                raise ValueError("当前项目组未加载。")
+            self.project_service.validate_project_structure(
+                self.group.root, self.current_project.path
+            )
             if self.task_mode_group.checkedId() == 1:
                 round_number = self.feedback_round_combo.currentData()
                 if round_number is None:
@@ -562,11 +607,18 @@ class HomePage(QWidget):
         if not self.current_project:
             return
         try:
+            if not self.group:
+                raise ValueError("当前项目组未加载。")
+            self.project_service.validate_project_structure(
+                self.group.root, self.current_project.path
+            )
             prompt = self.prompt_service.product_acceptance_prompt(self.current_project.path)
         except Exception as exc:
             self.error_requested.emit(f"无法生成产品验收 Prompt：{exc}")
             return
-        self._prompt_dialog = PromptDialog("完整产品验收", prompt, self)
+        self._prompt_dialog = PromptDialog(
+            "完整产品验收", prompt, self, "复制验收 Prompt"
+        )
         self._prompt_dialog.exec()
 
     def _choose_feedback_files(self) -> None:
@@ -645,6 +697,7 @@ class HomePage(QWidget):
         while self.pending_layout.count():
             layout_item = self.pending_layout.takeAt(0)
             if layout_item.widget():
+                layout_item.widget().hide()
                 layout_item.widget().deleteLater()
         if not self.pending_feedback:
             self.pending_empty_label = QLabel(

@@ -4,14 +4,17 @@ from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths, Qt, Signal
 from PySide6.QtWidgets import (
+    QBoxLayout,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QStyle,
     QVBoxLayout,
@@ -19,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from services import ProjectCreationError, ProjectService, TargetExistsError
-from ui.widgets import Card
+from ui.widgets import Card, FlowLayout
 
 
 class CreateProjectPage(QWidget):
@@ -55,11 +58,13 @@ class CreateProjectPage(QWidget):
         header.addStretch()
         page_layout.addLayout(header)
 
-        content = QHBoxLayout()
+        self.content_layout = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        content = self.content_layout
         content.setSpacing(18)
 
         form_card = Card()
-        form_card.setMinimumWidth(470)
+        form_card.setMinimumWidth(320)
+        form_card.setMinimumHeight(330)
         form_layout = QVBoxLayout(form_card)
         form_layout.setContentsMargins(24, 22, 24, 22)
         form_layout.setSpacing(17)
@@ -115,15 +120,15 @@ class CreateProjectPage(QWidget):
         tools_label = QLabel("公共工具")
         tools_label.setObjectName("fieldLabel")
         form_layout.addWidget(tools_label)
-        self.tools_status_layout = QHBoxLayout()
-        self.tools_status_layout.setSpacing(18)
+        self.tools_status_layout = FlowLayout(horizontal_spacing=18, vertical_spacing=6)
         form_layout.addLayout(self.tools_status_layout)
         form_layout.addStretch()
 
         content.addWidget(form_card, 5)
 
         mapping_card = Card()
-        mapping_card.setMinimumWidth(400)
+        mapping_card.setMinimumWidth(280)
+        mapping_card.setMinimumHeight(320)
         mapping_layout = QVBoxLayout(mapping_card)
         mapping_layout.setContentsMargins(24, 22, 24, 22)
         mapping_layout.setSpacing(14)
@@ -151,9 +156,20 @@ class CreateProjectPage(QWidget):
 
         self.mapping_list = QListWidget()
         self.mapping_list.setObjectName("mappingList")
+        self.mapping_list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         mapping_layout.addWidget(self.mapping_list, 1)
         content.addWidget(mapping_card, 4)
-        page_layout.addLayout(content, 1)
+
+        scroll_content = QWidget()
+        scroll_content.setObjectName("page")
+        scroll_content.setLayout(content)
+        self.content_scroll = QScrollArea()
+        self.content_scroll.setWidgetResizable(True)
+        self.content_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.content_scroll.setWidget(scroll_content)
+        page_layout.addWidget(self.content_scroll, 1)
 
         self.error_banner = QLabel()
         self.error_banner.setObjectName("errorBanner")
@@ -183,7 +199,6 @@ class CreateProjectPage(QWidget):
             label = QLabel(f"{'✓' if exists else '缺失'}  {name}")
             label.setObjectName("successText" if exists else "errorBanner")
             self.tools_status_layout.addWidget(label)
-        self.tools_status_layout.addStretch()
 
     def _default_desktop_path(self) -> str:
         desktop = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DesktopLocation)
@@ -225,8 +240,20 @@ class CreateProjectPage(QWidget):
     def _refresh_mapping_list(self) -> None:
         self.mapping_list.clear()
         for index, path in enumerate(self.json_files, start=1):
-            self.mapping_list.addItem(f"项目{index}    →    {path.name}")
+            item = QListWidgetItem(f"项目{index}    →    {path.name}")
+            item.setToolTip(str(path))
+            self.mapping_list.addItem(item)
         self._update_json_summary()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        direction = (
+            QBoxLayout.Direction.TopToBottom
+            if event.size().width() < 1050
+            else QBoxLayout.Direction.LeftToRight
+        )
+        if self.content_layout.direction() != direction:
+            self.content_layout.setDirection(direction)
 
     def _update_json_summary(self) -> None:
         self.json_summary.setText(

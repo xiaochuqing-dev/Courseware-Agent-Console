@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from services import TaskService
+from .elided_label import ElidedLabel
 
 
 class RulesEditorDialog(QDialog):
@@ -27,7 +29,12 @@ class RulesEditorDialog(QDialog):
         self.task_service = task_service
         self.setWindowTitle("编辑任务规则")
         self.setModal(True)
-        self.resize(780, 650)
+        screen = parent.screen() if parent is not None else QGuiApplication.primaryScreen()
+        available = screen.availableGeometry() if screen is not None else None
+        target_width = min(780, max(420, available.width() - 64)) if available else 780
+        target_height = min(650, max(360, available.height() - 64)) if available else 650
+        self.setMinimumSize(min(540, target_width), min(400, target_height))
+        self.resize(target_width, target_height)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 22)
@@ -37,7 +44,7 @@ class RulesEditorDialog(QDialog):
         title.setObjectName("pageTitle")
         layout.addWidget(title)
 
-        path_label = QLabel(str(group_root / "AGENT任务规则.md"))
+        path_label = ElidedLabel(str(group_root / "AGENT任务规则.md"))
         path_label.setObjectName("mutedText")
         path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(path_label)
@@ -64,7 +71,15 @@ class RulesEditorDialog(QDialog):
         layout.addLayout(actions)
 
     def _save(self) -> None:
-        self.task_service.save_rules(self.group_root, self.editor.toPlainText())
+        try:
+            self.task_service.save_rules(self.group_root, self.editor.toPlainText())
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "规则未保存",
+                f"无法写入任务规则：{self.group_root / 'AGENT任务规则.md'}\n\n{exc}",
+            )
+            return
         self.accept()
 
     def _restore_default(self) -> None:
@@ -77,4 +92,3 @@ class RulesEditorDialog(QDialog):
         )
         if answer == QMessageBox.StandardButton.Yes:
             self.editor.setPlainText(self.task_service.restore_default_rules(self.group_root))
-

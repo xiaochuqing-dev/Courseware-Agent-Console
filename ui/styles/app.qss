@@ -11,7 +11,7 @@ QMainWindow, QWidget#appBackground, QWidget#page {
 QFrame[card="true"] {
     background: rgba(255, 255, 255, 232);
     border: 1px solid rgba(138, 190, 175, 70);
-    border-radius: 14px;
+    border-radius: 8px;
 }
 
 QLabel#pageTitle {
@@ -36,6 +36,11 @@ QLabel#mutedText, QLabel[muted="true"] {
     color: #67847c;
 }
 
+QLabel#versionText {
+    color: #769087;
+    font-size: 11px;
+}
+
 QLabel#errorBanner {
     color: #8f3f3f;
     background: rgba(255, 240, 239, 235);
@@ -50,7 +55,7 @@ QLabel#successText {
 }
 
 QPushButton, QToolButton {
-    min-height: 38px;
+    min-height: 40px;
     padding: 0 15px;
     color: #24483e;
     background: rgba(248, 252, 250, 235);
@@ -62,6 +67,10 @@ QPushButton, QToolButton {
 QPushButton:hover, QToolButton:hover {
     background: rgba(238, 249, 245, 245);
     border-color: rgba(65, 142, 120, 150);
+}
+
+QPushButton:focus, QToolButton:focus {
+    border-color: #2f8769;
 }
 
 QPushButton:pressed, QToolButton:pressed {
@@ -189,6 +198,10 @@ QScrollArea {
     border: none;
 }
 
+QScrollArea > QWidget > QWidget {
+    background: transparent;
+}
+
 QScrollBar:vertical {
     width: 9px;
     margin: 3px;
@@ -203,6 +216,22 @@ QScrollBar::handle:vertical {
 
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0;
+}
+
+QScrollBar:horizontal {
+    height: 9px;
+    margin: 3px;
+    background: transparent;
+}
+
+QScrollBar::handle:horizontal {
+    min-width: 30px;
+    background: rgba(91, 142, 127, 95);
+    border-radius: 4px;
+}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0;
 }
 
 QDialog {
@@ -245,6 +274,24 @@ QFrame#pendingFeedbackRow {
     background: rgba(249, 253, 251, 220);
     border: 1px solid rgba(121, 170, 155, 70);
     border-radius: 7px;
+}
+
+QListWidget#workflowProjectList {
+    background: rgba(249, 253, 251, 220);
+    border: 1px solid rgba(111, 157, 144, 85);
+    border-radius: 8px;
+    padding: 7px;
+}
+
+QListWidget#workflowProjectList::item {
+    min-height: 44px;
+    padding: 0 10px;
+    margin: 2px;
+    border-radius: 6px;
+}
+
+QListWidget#workflowProjectList::item:hover {
+    background: rgba(222, 243, 236, 155);
 }
 
 QMenu {

@@ -49,17 +49,25 @@ class ArchiveService:
         group_path = Path(group_root).resolve()
         source = group_path / project_name
         if not source.is_dir():
-            raise ArchiveError(f"项目目录不存在：{source}")
+            raise ArchiveError(f"项目目录不存在或已被改名：{source}")
         if self.latest_product(source) is None:
-            raise NoProductVersionError("当前项目没有可用产品版本。")
+            raise NoProductVersionError(
+                f"当前项目没有可用产品版本：{source / '产品迭代'}。"
+                "请确认初始版本或第 N 轮修改 HTML 已保存。"
+            )
         destination = self.archive_destination(group_path, project_name)
         if destination.exists():
-            raise ArchiveConflictError("归档目录已存在同名项目，请先处理冲突。")
+            raise ArchiveConflictError(
+                f"归档目标已存在同名项目：{destination}。不会覆盖或合并，"
+                "请先手动核对并处理冲突。"
+            )
         destination.parent.mkdir(parents=True, exist_ok=True)
         try:
             shutil.move(str(source), str(destination))
         except Exception as exc:
-            raise ArchiveError(f"项目归档失败：{exc}") from exc
+            raise ArchiveError(
+                f"项目归档失败。源目录：{source}；目标目录：{destination}。\n{exc}"
+            ) from exc
         return destination
 
     def archived_group_names(self, group_root: Path) -> tuple[str, ...]:

@@ -10,6 +10,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from models import ProjectEntry, ProjectGroup
+from .resource_paths import bundled_resource_root
 
 
 class ProjectCreationError(RuntimeError):
@@ -47,7 +48,7 @@ class ProjectService:
         self.resource_root = (
             Path(resource_root)
             if resource_root
-            else Path(__file__).resolve().parents[1] / "resources"
+            else bundled_resource_root()
         )
         self.public_tools_root = self.resource_root / "default_public_tools"
         self.prompt_templates_root = self.resource_root / "prompt_templates"
@@ -84,6 +85,12 @@ class ProjectService:
         target = parent / name
         if target.exists():
             raise TargetExistsError(target)
+        longest_target = target / f"项目{project_count}" / "产品迭代" / "第999轮修改.html"
+        if len(str(longest_target.resolve())) >= 240:
+            raise ValidationError(
+                "目标路径过长，后续保存版本可能失败。请缩短项目组名称或选择更靠近磁盘根目录的位置："
+                f"{target}"
+            )
 
         missing = self.missing_public_tools()
         if missing:
@@ -177,6 +184,37 @@ class ProjectService:
                 )
         projects.sort(key=lambda item: item.index)
         return ProjectGroup(root=resolved_root, projects=tuple(projects))
+
+    def validate_group_resources(self, group_root: Path) -> None:
+        root = Path(group_root).resolve()
+        rules = root / "AGENT任务规则.md"
+        if not rules.is_file():
+            raise FileNotFoundError(
+                f"任务规则文件不存在：{rules}。请先在“编辑任务规则”中恢复默认规则。"
+            )
+        for name in self.REQUIRED_PUBLIC_TOOLS:
+            path = root / "公共工具" / name
+            if not path.is_file():
+                raise FileNotFoundError(
+                    f"公共工具缺失：{path}。请从原项目组备份恢复该文件后重试。"
+                )
+
+    def validate_project_structure(self, group_root: Path, project_root: Path) -> None:
+        self.validate_group_resources(group_root)
+        project = Path(project_root).resolve()
+        if not project.is_dir():
+            raise FileNotFoundError(f"项目目录不存在或已被改名：{project}")
+        source = project / "原始需求"
+        if not source.is_dir() or not any(path.is_file() for path in source.iterdir()):
+            raise FileNotFoundError(
+                f"原始需求目录为空或不存在：{source}。请恢复原始需求文件后重试。"
+            )
+        for directory_name in ("客户反馈", "产品迭代"):
+            path = project / directory_name
+            if not path.is_dir():
+                raise FileNotFoundError(
+                    f"项目目录缺失：{path}。请确认是否需要重新创建空目录。"
+                )
 
     @staticmethod
     def open_in_file_manager(path: Path) -> None:
