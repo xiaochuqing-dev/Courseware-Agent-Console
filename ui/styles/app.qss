@@ -1,0 +1,312 @@
+QWidget {
+    color: #17352e;
+    font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI";
+    font-size: 14px;
+}
+
+QMainWindow, QWidget#appBackground, QWidget#page {
+    background: transparent;
+}
+
+QFrame[card="true"] {
+    background: rgba(255, 255, 255, 232);
+    border: 1px solid rgba(138, 190, 175, 70);
+    border-radius: 8px;
+}
+
+QLabel#pageTitle {
+    color: #143c32;
+    font-size: 24px;
+    font-weight: 700;
+}
+
+QLabel#sectionTitle {
+    color: #173c33;
+    font-size: 17px;
+    font-weight: 650;
+}
+
+QLabel#fieldLabel {
+    color: #47665e;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QLabel#mutedText, QLabel[muted="true"] {
+    color: #67847c;
+}
+
+QLabel#versionText {
+    color: #769087;
+    font-size: 11px;
+}
+
+QLabel#errorBanner {
+    color: #8f3f3f;
+    background: rgba(255, 240, 239, 235);
+    border: 1px solid rgba(207, 122, 116, 110);
+    border-radius: 8px;
+    padding: 9px 12px;
+}
+
+QLabel#successText {
+    color: #247359;
+    font-weight: 600;
+}
+
+QPushButton, QToolButton {
+    min-height: 40px;
+    padding: 0 15px;
+    color: #24483e;
+    background: rgba(248, 252, 250, 235);
+    border: 1px solid rgba(101, 158, 142, 105);
+    border-radius: 8px;
+    font-weight: 600;
+}
+
+QPushButton:hover, QToolButton:hover {
+    background: rgba(238, 249, 245, 245);
+    border-color: rgba(65, 142, 120, 150);
+}
+
+QPushButton:focus, QToolButton:focus {
+    border-color: #2f8769;
+}
+
+QPushButton:pressed, QToolButton:pressed {
+    background: rgba(220, 241, 233, 245);
+}
+
+QPushButton:disabled {
+    color: #92a79f;
+    background: rgba(242, 247, 245, 205);
+    border-color: rgba(150, 178, 169, 75);
+}
+
+QPushButton[role="primary"] {
+    color: #ffffff;
+    background: #3d9a78;
+    border-color: #3d9a78;
+}
+
+QPushButton[role="primary"]:hover {
+    background: #318d6c;
+    border-color: #318d6c;
+}
+
+QPushButton[role="primary"]:pressed {
+    background: #28785d;
+}
+
+QPushButton[role="primary"]:disabled {
+    color: #92a79f;
+    background: rgba(226, 239, 234, 225);
+    border-color: rgba(150, 178, 169, 75);
+}
+
+QPushButton[role="quiet"] {
+    background: transparent;
+    border-color: transparent;
+}
+
+QPushButton[role="quiet"]:hover {
+    background: rgba(218, 241, 233, 175);
+}
+
+QPushButton[iconOnly="true"] {
+    min-width: 38px;
+    max-width: 38px;
+    padding: 0;
+}
+
+QLineEdit, QSpinBox, QComboBox, QPlainTextEdit, QTextEdit {
+    color: #173a31;
+    background: rgba(252, 254, 253, 245);
+    border: 1px solid rgba(111, 157, 144, 100);
+    border-radius: 8px;
+    selection-background-color: #b9e4d4;
+    selection-color: #173a31;
+}
+
+QLineEdit, QSpinBox, QComboBox {
+    min-height: 38px;
+    padding: 0 11px;
+}
+
+QSpinBox {
+    padding-right: 2px;
+}
+
+QPlainTextEdit, QTextEdit {
+    padding: 10px;
+}
+
+QLineEdit:focus, QSpinBox:focus, QComboBox:focus, QPlainTextEdit:focus, QTextEdit:focus {
+    border: 1px solid #4a9f81;
+}
+
+QComboBox::drop-down {
+    width: 28px;
+    border: none;
+}
+
+QListWidget {
+    background: transparent;
+    border: none;
+    outline: none;
+}
+
+QListWidget#projectList::item {
+    min-height: 42px;
+    margin: 2px 0;
+    padding: 0 12px;
+    color: #3e5f56;
+    border-radius: 8px;
+}
+
+QListWidget#projectList::item:hover {
+    background: rgba(222, 243, 236, 155);
+}
+
+QListWidget#projectList::item:selected {
+    color: #20664f;
+    background: rgba(201, 237, 224, 225);
+    font-weight: 650;
+}
+
+QListWidget#mappingList {
+    background: rgba(249, 253, 251, 220);
+    border: 1px solid rgba(111, 157, 144, 85);
+    border-radius: 9px;
+    padding: 5px;
+}
+
+QListWidget#mappingList::item {
+    min-height: 43px;
+    padding: 0 10px;
+    margin: 2px;
+    border-radius: 7px;
+}
+
+QListWidget#mappingList::item:selected {
+    color: #205f4d;
+    background: rgba(207, 237, 226, 220);
+}
+
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+
+QScrollArea > QWidget > QWidget {
+    background: transparent;
+}
+
+QScrollBar:vertical {
+    width: 9px;
+    margin: 3px;
+    background: transparent;
+}
+
+QScrollBar::handle:vertical {
+    min-height: 30px;
+    background: rgba(91, 142, 127, 95);
+    border-radius: 4px;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+QScrollBar:horizontal {
+    height: 9px;
+    margin: 3px;
+    background: transparent;
+}
+
+QScrollBar::handle:horizontal {
+    min-width: 30px;
+    background: rgba(91, 142, 127, 95);
+    border-radius: 4px;
+}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0;
+}
+
+QDialog {
+    background: #eff8f4;
+}
+
+QPushButton[taskMode="true"] {
+    min-width: 96px;
+    border-radius: 6px;
+    background: rgba(248, 252, 250, 225);
+}
+
+QPushButton[taskMode="true"]:checked {
+    color: #ffffff;
+    background: #3d9a78;
+    border-color: #3d9a78;
+}
+
+QToolButton {
+    min-width: 98px;
+}
+
+QFrame#feedbackDropArea {
+    background: rgba(245, 251, 248, 220);
+    border: 1px dashed rgba(70, 145, 123, 155);
+    border-radius: 8px;
+}
+
+QFrame#feedbackDropArea:focus {
+    background: rgba(235, 248, 242, 235);
+    border-color: #3d9a78;
+}
+
+QLabel#dropTitle, QLabel#pendingFileName {
+    color: #214b40;
+    font-weight: 600;
+}
+
+QFrame#pendingFeedbackRow {
+    background: rgba(249, 253, 251, 220);
+    border: 1px solid rgba(121, 170, 155, 70);
+    border-radius: 7px;
+}
+
+QListWidget#workflowProjectList {
+    background: rgba(249, 253, 251, 220);
+    border: 1px solid rgba(111, 157, 144, 85);
+    border-radius: 8px;
+    padding: 7px;
+}
+
+QListWidget#workflowProjectList::item {
+    min-height: 44px;
+    padding: 0 10px;
+    margin: 2px;
+    border-radius: 6px;
+}
+
+QListWidget#workflowProjectList::item:hover {
+    background: rgba(222, 243, 236, 155);
+}
+
+QMenu {
+    color: #173a31;
+    background: #f8fcfa;
+    border: 1px solid rgba(111, 157, 144, 100);
+    padding: 5px;
+}
+
+QMenu::item {
+    min-width: 150px;
+    padding: 8px 14px;
+    border-radius: 5px;
+}
+
+QMenu::item:selected {
+    background: rgba(207, 237, 226, 220);
+}
