@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -9,10 +10,16 @@ from PySide6.QtGui import QFont, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication
 
 from ui.main_window import MainWindow
+from services.app_logging import LOGGER_NAME, configure_logging
 from services.resource_paths import bundled_resource_root
 
 
+logger = logging.getLogger(LOGGER_NAME)
+
+
 def create_application(argv: list[str] | None = None) -> QApplication:
+    log_path = configure_logging()
+    logger.info("Application startup; log=%s", log_path)
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )

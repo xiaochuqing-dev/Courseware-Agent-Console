@@ -53,6 +53,7 @@ class HomePage(QWidget):
     workflow_optimization_requested = Signal()
     toast_requested = Signal(str)
     error_requested = Signal(str)
+    project_selected = Signal(object, str)
 
     def __init__(
         self,
@@ -183,25 +184,47 @@ class HomePage(QWidget):
         main_layout.addWidget(header_card)
 
         self.content_stack = QStackedWidget()
-        empty_card = Card()
-        empty_layout = QVBoxLayout(empty_card)
-        empty_layout.setContentsMargins(42, 42, 42, 42)
+        empty_page = QWidget()
+        empty_page.setObjectName("page")
+        empty_layout = QVBoxLayout(empty_page)
+        empty_layout.setContentsMargins(42, 36, 42, 36)
+        empty_layout.setSpacing(12)
         empty_layout.addStretch()
-        empty_title = QLabel("尚未选择进行中项目")
-        empty_title.setObjectName("pageTitle")
-        empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        empty_layout.addWidget(empty_title)
-        self.empty_message = QLabel("请选择已有项目组，或从左侧创建新项目。")
+        self.empty_title = QLabel("课件项目")
+        self.empty_title.setObjectName("pageTitle")
+        self.empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_layout.addWidget(self.empty_title)
+        self.empty_message = QLabel("尚未选择项目组")
         self.empty_message.setObjectName("mutedText")
         self.empty_message.setWordWrap(True)
         self.empty_message.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty_layout.addWidget(self.empty_message)
-        select_group_button = QPushButton("选择已有项目组")
-        select_group_button.setFixedWidth(180)
-        select_group_button.clicked.connect(self.choose_group_requested)
-        empty_layout.addWidget(select_group_button, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        empty_actions = QHBoxLayout()
+        empty_actions.addStretch()
+        self.empty_create_button = QPushButton("创建新项目")
+        self.empty_create_button.setProperty("role", "primary")
+        self.empty_create_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder)
+        )
+        self.empty_create_button.clicked.connect(self.create_project_requested)
+        empty_actions.addWidget(self.empty_create_button)
+        self.empty_select_button = QPushButton("选择已有项目组")
+        self.empty_select_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon)
+        )
+        self.empty_select_button.clicked.connect(self.choose_group_requested)
+        empty_actions.addWidget(self.empty_select_button)
+        self.empty_completed_button = QPushButton("查看已完成项目")
+        self.empty_completed_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
+        )
+        self.empty_completed_button.clicked.connect(self.completed_projects_requested)
+        empty_actions.addWidget(self.empty_completed_button)
+        empty_actions.addStretch()
+        empty_layout.addLayout(empty_actions)
         empty_layout.addStretch()
-        self.content_stack.addWidget(empty_card)
+        self.content_stack.addWidget(empty_page)
 
         self.work_scroll = QScrollArea()
         self.work_scroll.setWidgetResizable(True)
@@ -440,9 +463,11 @@ class HomePage(QWidget):
             self.project_list.setCurrentRow(selected_row)
         else:
             self.archive_button.setEnabled(False)
-            self.empty_message.setText(
-                "该项目组暂无进行中的项目。可从左侧“已完成项目”查看归档内容。"
-            )
+            self.empty_title.setText("当前项目组没有进行中项目")
+            self.empty_message.setText(group.name)
+            self.empty_create_button.hide()
+            self.empty_select_button.show()
+            self.empty_completed_button.show()
             self.content_stack.setCurrentIndex(0)
 
     def set_empty_state(self, message: str | None = None) -> None:
@@ -469,7 +494,11 @@ class HomePage(QWidget):
             self.open_project_button,
         ):
             widget.setEnabled(False)
-        self.empty_message.setText(message or "请选择已有项目组，或从左侧创建新项目。")
+        self.empty_title.setText("课件项目")
+        self.empty_message.setText(message or "尚未选择项目组")
+        self.empty_create_button.show()
+        self.empty_select_button.show()
+        self.empty_completed_button.hide()
         self.content_stack.setCurrentIndex(0)
 
     def refresh_group(self) -> None:
@@ -522,6 +551,7 @@ class HomePage(QWidget):
         self.archive_button.setEnabled(True)
         self.open_project_button.setEnabled(True)
         self._refresh_project_state()
+        self.project_selected.emit(self.group.root, next_project.name)
 
     def _refresh_project_state(self) -> None:
         if not self.current_project:

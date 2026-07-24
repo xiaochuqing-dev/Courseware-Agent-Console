@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+from time import perf_counter
 
 from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import (
@@ -21,6 +23,7 @@ from services import (
     SettingsService,
     TaskService,
 )
+from services.app_logging import LOGGER_NAME
 from ui.pages import (
     CompletedProjectsPage,
     CreateProjectPage,
@@ -29,6 +32,9 @@ from ui.pages import (
 )
 from ui.widgets import BackgroundWidget, Toast
 from ui.widgets.rules_editor_dialog import RulesEditorDialog
+
+
+logger = logging.getLogger(LOGGER_NAME)
 
 
 class MainWindow(QMainWindow):
@@ -91,6 +97,7 @@ class MainWindow(QMainWindow):
         )
         self.home_page.toast_requested.connect(self.show_toast)
         self.home_page.error_requested.connect(self.show_error)
+        self.home_page.project_selected.connect(self._remember_project_selection)
         self.create_page.cancelled.connect(self.show_home_page)
         self.create_page.project_created.connect(self._project_created)
         self.create_page.open_existing_requested.connect(self._open_existing_group)
@@ -104,24 +111,31 @@ class MainWindow(QMainWindow):
         self._restore_recent_group()
 
     def show_home_page(self) -> None:
+        logger.info("Page switch: home")
         self.page_stack.setCurrentWidget(self.home_page)
         self.home_page.refresh_current_project()
 
     def show_create_page(self) -> None:
-        self.create_page.refresh_public_tools()
+        started = perf_counter()
         self.page_stack.setCurrentWidget(self.create_page)
+        logger.info(
+            "Page switch: create project; elapsed_ms=%.2f",
+            (perf_counter() - started) * 1000,
+        )
 
     def show_completed_projects(self) -> None:
         if not self.home_page.group:
             return
         self.completed_page.set_context(self.home_page.group.root)
         self.page_stack.setCurrentWidget(self.completed_page)
+        logger.info("Page switch: completed projects")
 
     def show_workflow_optimization(self) -> None:
         if not self.home_page.group:
             return
         self.workflow_page.set_context(self.home_page.group.root)
         self.page_stack.setCurrentWidget(self.workflow_page)
+        logger.info("Page switch: workflow optimization")
 
     def choose_project_group(self) -> None:
         start = self.settings_service.recent_group_path()
@@ -160,12 +174,14 @@ class MainWindow(QMainWindow):
             else:
                 self.show_error(str(exc))
                 return False
-        self.home_page.set_group(group)
+        preferred_project = self.settings_service.last_selected_project(group.root)
+        self.home_page.set_group(group, preferred_project)
         self.completed_page.set_context(group.root)
         self.workflow_page.set_context(group.root)
         if persist:
             self.settings_service.save_recent_group_path(group.root)
         self.show_home_page()
+        logger.info("Project group loaded; project_count=%d", len(group.projects))
         return True
 
     def edit_rules(self) -> None:
@@ -244,19 +260,26 @@ class MainWindow(QMainWindow):
         if self.load_project_group(path):
             self.show_toast("项目组已创建")
 
+    def _remember_project_selection(self, group_path: Path, project_name: str) -> None:
+        self.settings_service.save_last_selected_project(group_path, project_name)
+        logger.info("Project selection saved")
+
     def _open_existing_group(self, path: Path) -> None:
         self.load_project_group(path)
 
     def _restore_recent_group(self) -> None:
         recent = self.settings_service.recent_group_path()
         if not recent:
+            logger.info("No recent project group to restore")
             self.home_page.set_empty_state()
             return
         if not recent.exists():
+            logger.warning("Recent project group no longer exists")
             self.settings_service.clear_recent_group_path()
             self.home_page.set_empty_state("最近使用的项目组已不存在，请重新选择。")
             return
         if not self.load_project_group(recent, persist=False):
+            logger.warning("Recent project group could not be restored")
             self.settings_service.clear_recent_group_path()
             self.home_page.set_empty_state("最近使用的目录不是有效项目组，请重新选择。")
 
