@@ -183,7 +183,7 @@ def main() -> int:
         dialog = QMessageBox(window)
         dialog.setWindowTitle("预览项目命名迁移")
         dialog.setIcon(QMessageBox.Icon.Information)
-        dialog.setText("迁移前将创建完整备份")
+        dialog.setText("不会创建备份；文件夹被占用时原目录保持不变")
         dialog.setInformativeText(
             "\n".join(f"{old} → {new}" for old, new in preview)
         )

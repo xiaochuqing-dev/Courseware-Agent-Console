@@ -114,7 +114,7 @@ def main() -> int:
         migration.setIcon(QMessageBox.Icon.Information)
         migration.setText("旧项目结构已迁移为“产品迭代”结构。")
         migration.setInformativeText(
-            "完整迁移前备份已保留在项目组同级目录。\n"
+            "迁移未创建备份。\n"
             "同名文件未覆盖，冲突已使用来源后缀保留。"
         )
         migration.addButton("打开迁移报告", QMessageBox.ButtonRole.ActionRole)

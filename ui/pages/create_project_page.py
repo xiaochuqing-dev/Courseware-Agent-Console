@@ -34,7 +34,7 @@ from services import (
     ToolValidationResult,
 )
 from services.app_logging import LOGGER_NAME
-from ui.widgets import Card, FlowLayout
+from ui.widgets import Card, FlowLayout, configure_wrapped_list
 from ui.workers import BackgroundTaskRelay, BackgroundWorker
 
 
@@ -244,7 +244,7 @@ class CreateProjectPage(QWidget):
 
         self.mapping_list = QListWidget()
         self.mapping_list.setObjectName("mappingList")
-        self.mapping_list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        configure_wrapped_list(self.mapping_list, minimum_height=48)
         mapping_layout.addWidget(self.mapping_list, 1)
         content.addWidget(mapping_card, 4)
 

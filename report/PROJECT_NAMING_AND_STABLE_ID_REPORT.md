@@ -56,18 +56,18 @@
 
 ## 旧数据迁移
 
-- 旧“项目1～项目N”迁移前在项目组同级创建完整备份。
+- 旧“项目1～项目N”通过临时事务目录迁移；成功或正常失败后自动清理，不创建持久备份。
 - 从每个项目唯一原始 JSON 推导课题名，补齐 `project_id` 和项目配置，升级项目组 schema v3，并安全重命名目录。
 - 原始需求、客户反馈、产品迭代、当前任务和项目记录完整保留；已有稳定 ID 在结构迁移时保留。
-- 旧“初始版本/第N轮修改”产品迁移前完整备份，迁移为新命名并建立 artifact 索引；冲突不覆盖，失败执行回滚。
+- 旧“初始版本/第N轮修改”产品迁移为新命名并建立 artifact 索引；冲突不覆盖，失败时原目录保持不变。
 
 ## 验证结果
 
-- 全量测试：`pytest`，68 项全部通过。
+- 全量测试：`pytest`，73 项全部通过。
 - 源码烟测：`python app.py --smoke-test`，通过。
 - Windows EXE 烟测：退出码 0；实际启动后进程正常保持运行。
 - EXE：`dist/CoursewareAgentConsole.dist/CoursewareAgentConsole.exe`
-- EXE SHA-256：`BCCC7022D8890DB2FCA6D298665D9BE028CAD172E6E6FF9FE8A19C809E00E2F6`
+- EXE SHA-256：`81ECC68ECF16BB341FD84D87C55B85B52F0A275AC6D83ED92D9549BB46D5F250`
 - 构建资源与源码资源哈希一致。
 
 ## 截图

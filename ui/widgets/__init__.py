@@ -6,6 +6,7 @@ from .feedback_drop import FeedbackDropArea, PendingFeedbackRow
 from .flow_layout import FlowLayout
 from .prompt_dialog import PromptDialog
 from .toast import Toast
+from .wrapped_item_delegate import WrappedItemDelegate, configure_wrapped_list
 
 __all__ = [
     "BackgroundWidget",
@@ -17,4 +18,6 @@ __all__ = [
     "PendingFeedbackRow",
     "PromptDialog",
     "Toast",
+    "WrappedItemDelegate",
+    "configure_wrapped_list",
 ]

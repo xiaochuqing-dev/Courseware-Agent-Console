@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from services import ArchiveService, PromptService
-from ui.widgets import Card, PromptDialog
+from ui.widgets import Card, PromptDialog, configure_wrapped_list
 
 
 class WorkflowOptimizationPage(QWidget):
@@ -94,6 +94,7 @@ class WorkflowOptimizationPage(QWidget):
 
         self.project_list = QListWidget()
         self.project_list.setObjectName("workflowProjectList")
+        configure_wrapped_list(self.project_list, minimum_height=44)
         self.project_list.itemChanged.connect(self._update_selection)
         card_layout.addWidget(self.project_list, 1)
 

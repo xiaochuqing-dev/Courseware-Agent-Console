@@ -188,7 +188,7 @@ def test_settings_persist_group_and_project_ids(tmp_path: Path) -> None:
     }
 
 
-def test_legacy_project_and_product_migrate_with_backup_and_meta(tmp_path: Path) -> None:
+def test_legacy_project_and_product_migrate_without_backup_and_keep_meta(tmp_path: Path) -> None:
     service, group, _ = _group(tmp_path, ("正方形纸片的翻折问题",))
     project = group.projects[0]
     legacy_path = group.root / "项目1"
@@ -204,7 +204,10 @@ def test_legacy_project_and_product_migrate_with_backup_and_meta(tmp_path: Path)
     )
 
     result = service.migrate_legacy_group(group.root)
-    assert result.backup_root.is_dir()
+    assert result.group_root == group.root
+    assert list(tmp_path.glob("正方形纸片的翻折问题-迁移前备份-*")) == []
+    assert list(tmp_path.glob(".正方形纸片的翻折问题.migrating-*")) == []
+    assert list(tmp_path.glob(".正方形纸片的翻折问题.migration-original-*")) == []
     migrated = service.load_project_group(group.root).projects[0]
     assert migrated.display_name == "正方形纸片的翻折问题"
     migrated_product = migrated.path / "产品迭代" / "正方形纸片的翻折问题.html"

@@ -9,9 +9,9 @@ from uuid import uuid4
 
 import pytest
 import send2trash
-from PySide6.QtCore import QEvent, QPoint, QSettings, QSize
+from PySide6.QtCore import QEvent, QPoint, QSettings, QSize, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QListWidget, QListWidgetItem, QMessageBox
 
 from app import activate_window
 from services import (
@@ -27,7 +27,7 @@ from services.process_utils import hidden_process_options
 from tests.helpers import tool_binding
 from ui.main_window import MainWindow
 from ui.pages import CreateProjectPage
-from ui.widgets import Toast
+from ui.widgets import Toast, WrappedItemDelegate, configure_wrapped_list
 
 
 @pytest.fixture
@@ -80,7 +80,7 @@ def test_schema_v3_has_stable_ids_and_single_product_directory(
     }
 
 
-def test_legacy_migration_backs_up_merges_without_overwrite_and_is_repeat_safe(
+def test_legacy_migration_without_backup_merges_and_preserves_all_acceptance_records(
     tmp_path: Path, resource_root: Path
 ) -> None:
     service, group = create_group(tmp_path, resource_root, "旧结构")
@@ -94,6 +94,8 @@ def test_legacy_migration_backs_up_merges_without_overwrite_and_is_repeat_safe(
     old_reports = project / "验收记录"
     old_reports.mkdir()
     (old_reports / "验收-旧.md").write_text("旧验收结论", encoding="utf-8")
+    full_second_record = "第二份完整验收记录" * 300
+    (old_reports / "验收-补充.txt").write_text(full_second_record, encoding="utf-8")
     manifest = service.read_manifest(group.root)
     manifest.update(
         schema_version=1,
@@ -106,7 +108,6 @@ def test_legacy_migration_backs_up_merges_without_overwrite_and_is_repeat_safe(
 
     result = service.migrate_legacy_group(group.root)
 
-    assert result.backup_root.is_dir()
     migrated_group = service.load_project_group(group.root)
     migrated = migrated_group.projects[0].path
     assert (migrated / "产品迭代" / "旧结构.html").is_file()
@@ -115,13 +116,20 @@ def test_legacy_migration_backs_up_merges_without_overwrite_and_is_repeat_safe(
     assert len(conflicts) == 1
     assert conflicts[0].read_text(encoding="utf-8") == "delivery"
     assert not any((migrated / name).exists() for name in service.LEGACY_DIRECTORIES)
-    assert "旧验收结论" in (migrated / "项目记录.md").read_text(encoding="utf-8")
+    project_record = (migrated / "项目记录.md").read_text(encoding="utf-8")
+    assert "旧验收结论" in project_record
+    assert full_second_record in project_record
+    assert "验收-旧.md" in project_record
+    assert "验收-补充.txt" in project_record
     assert service.read_manifest(group.root)["schema_version"] == 3
+    assert list(tmp_path.glob("旧结构-迁移前备份-*")) == []
+    assert list(tmp_path.glob(".旧结构.migrating-*")) == []
+    assert list(tmp_path.glob(".旧结构.migration-original-*")) == []
     with pytest.raises(RuntimeError, match="已经是 schema v3"):
         service.migrate_legacy_group(group.root)
 
 
-def test_migration_failure_keeps_original_and_named_backup(
+def test_migration_failure_keeps_original_without_backup_or_temporary_copy(
     tmp_path: Path, resource_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service, group = create_group(tmp_path, resource_root, "迁移失败")
@@ -137,12 +145,12 @@ def test_migration_failure_keeps_original_and_named_backup(
 
     monkeypatch.setattr(service, "_merge_directory", fail_merge)
     (original_project / "工作文件").mkdir()
-    with pytest.raises(ProjectCreationError, match="迁移失败"):
+    with pytest.raises(ProjectCreationError, match="迁移未完成"):
         service.migrate_legacy_group(group.root)
     assert sentinel.read_text(encoding="utf-8") == "keep"
-    backups = list(tmp_path.glob("迁移失败-迁移前备份-*"))
-    assert len(backups) == 1
-    assert (backups[0] / original_project.name / "原始需求" / "sentinel.txt").is_file()
+    assert list(tmp_path.glob("迁移失败-迁移前备份-*")) == []
+    assert list(tmp_path.glob(".迁移失败.migrating-*")) == []
+    assert list(tmp_path.glob(".迁移失败.migration-original-*")) == []
 
 
 def test_migration_permission_error_explains_that_the_folder_is_in_use(
@@ -155,13 +163,96 @@ def test_migration_permission_error_explains_that_the_folder_is_in_use(
 
     assert "正在资源管理器中打开" in message
     assert "请关闭已打开的项目文件夹" in message
-    assert "不会丢失数据" in message
+    assert "原项目保持不变" in message
+    assert "未创建备份" in message
     assert "migration-original" not in message
+
+
+def test_migration_folder_lock_keeps_original_and_cleans_working_copy(
+    tmp_path: Path, resource_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, group = create_group(tmp_path, resource_root, "目录占用")
+    manifest = service.read_manifest(group.root)
+    manifest["schema_version"] = 1
+    (group.root / service.MANIFEST_NAME).write_text(json.dumps(manifest), encoding="utf-8")
+    sentinel = group.projects[0].path / "原始需求" / "sentinel.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    original_rename = Path.rename
+
+    def reject_group_rename(path: Path, target: Path):
+        if path == group.root:
+            raise PermissionError(13, "Access is denied", str(path))
+        return original_rename(path, target)
+
+    monkeypatch.setattr(Path, "rename", reject_group_rename)
+
+    with pytest.raises(ProjectCreationError) as error:
+        service.migrate_legacy_group(group.root)
+
+    message = str(error.value)
+    assert "正在资源管理器中打开" in message
+    assert "原项目保持不变" in message
+    assert "未创建备份" in message
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+    assert list(tmp_path.glob("目录占用-迁移前备份-*")) == []
+    assert list(tmp_path.glob(".目录占用.migrating-*")) == []
+    assert list(tmp_path.glob(".目录占用.migration-original-*")) == []
+
+
+def test_unreadable_legacy_acceptance_file_stops_before_replacing_original(
+    tmp_path: Path, resource_root: Path
+) -> None:
+    service, group = create_group(tmp_path, resource_root, "验收不可读")
+    project = group.projects[0].path
+    old_reports = project / "验收记录"
+    old_reports.mkdir()
+    unreadable = old_reports / "验收-损坏.bin"
+    unreadable.write_bytes(b"\xff\xfe\xfa")
+    manifest = service.read_manifest(group.root)
+    manifest["schema_version"] = 1
+    (group.root / service.MANIFEST_NAME).write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ProjectCreationError, match="原项目保持不变"):
+        service.migrate_legacy_group(group.root)
+
+    assert unreadable.read_bytes() == b"\xff\xfe\xfa"
+    assert list(tmp_path.glob("验收不可读-迁移前备份-*")) == []
+    assert list(tmp_path.glob(".验收不可读.migrating-*")) == []
+    assert list(tmp_path.glob(".验收不可读.migration-original-*")) == []
 
 
 def test_default_window_size_is_taller_on_large_screens_and_adapts_to_small_ones() -> None:
     assert MainWindow._preferred_window_size(QSize(1600, 1000)) == QSize(1240, 920)
     assert MainWindow._preferred_window_size(QSize(1000, 700)) == QSize(976, 668)
+
+
+def test_project_names_wrap_to_two_lines_before_eliding(app: QApplication) -> None:
+    project_list = QListWidget()
+    project_list.resize(240, 320)
+    configure_wrapped_list(project_list)
+    names = (
+        "影子变化",
+        "太阳光线下物体影子的变化规律。",
+        "太阳光线下物体影子的变化规律与测量方法综合实践活动完整课题名称",
+    )
+    for name in names:
+        item = QListWidgetItem(name)
+        item.setToolTip(name)
+        project_list.addItem(item)
+
+    project_list.show()
+    app.processEvents()
+
+    assert isinstance(project_list.itemDelegate(), WrappedItemDelegate)
+    assert project_list.wordWrap()
+    assert project_list.textElideMode() == Qt.TextElideMode.ElideRight
+    assert project_list.sizeHintForRow(1) >= project_list.sizeHintForRow(0)
+    assert project_list.sizeHintForRow(2) == project_list.sizeHintForRow(1)
+    assert project_list.item(1).text() == names[1]
+    assert project_list.item(2).text() == names[2]
+    assert project_list.item(2).toolTip() == names[2]
+
+    project_list.close()
 
 
 def test_multiple_renamed_project_directories_require_explicit_mapping(

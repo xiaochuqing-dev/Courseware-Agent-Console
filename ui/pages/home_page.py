@@ -45,6 +45,7 @@ from ui.widgets import (
     FlowLayout,
     PendingFeedbackRow,
     PromptDialog,
+    configure_wrapped_list,
 )
 
 
@@ -103,7 +104,7 @@ class HomePage(QWidget):
         root_layout.setSpacing(14)
 
         sidebar = Card()
-        sidebar.setFixedWidth(206)
+        sidebar.setFixedWidth(240)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(15, 17, 15, 17)
         sidebar_layout.setSpacing(12)
@@ -129,6 +130,7 @@ class HomePage(QWidget):
 
         self.project_list = QListWidget()
         self.project_list.setObjectName("projectList")
+        configure_wrapped_list(self.project_list)
         self.project_list.currentItemChanged.connect(self._on_project_selected)
         sidebar_layout.addWidget(self.project_list, 1)
 
@@ -307,16 +309,20 @@ class HomePage(QWidget):
         task_title = QLabel("当前任务")
         task_title.setObjectName("sectionTitle")
         title_row.addWidget(task_title)
-        self.current_project_label = ElidedLabel()
+        self.current_project_label = QLabel()
         self.current_project_label.setObjectName("taskProjectName")
         self.current_project_label.setMinimumWidth(120)
         self.current_project_label.setMaximumWidth(360)
+        self.current_project_label.setWordWrap(True)
         title_row.addWidget(self.current_project_label, 1)
-        self.latest_product_label = ElidedLabel("最新产品：无")
+        self.latest_product_label = QLabel("最新产品：无")
         self.latest_product_label.setObjectName("mutedText")
         self.latest_product_label.setFixedWidth(300)
         self.latest_product_label.setContentsMargins(0, 0, 12, 0)
-        self.latest_product_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.latest_product_label.setWordWrap(True)
+        self.latest_product_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
         title_row.addWidget(self.latest_product_label)
         task_layout.addLayout(title_row)
 
@@ -618,6 +624,9 @@ class HomePage(QWidget):
         self.content_stack.setCurrentIndex(0)
         self.task_status_text.setText("尚未生成当前任务")
         self.current_project_label.setText("")
+        self.current_project_label.setToolTip("")
+        self.latest_product_label.setText("最新产品：无")
+        self.latest_product_label.setToolTip("最新产品：无")
         self.tools_binding_label.setText("工具绑定：未选择项目组")
         self.acceptance_status_label.setText("验收状态：未验收")
         self._update_task_mode_state()
@@ -981,9 +990,11 @@ class HomePage(QWidget):
             self.acceptance_status_label.setText("验收状态：未通过或已过期")
 
         latest_product = self.archive_service.latest_product(self.current_project.path)
-        self.latest_product_label.setText(
+        latest_product_text = (
             f"最新产品：{latest_product.name}" if latest_product else "最新产品：无"
         )
+        self.latest_product_label.setText(latest_product_text)
+        self.latest_product_label.setToolTip(latest_product_text)
         self._refresh_identity_notice()
         rounds = self.feedback_service.scan_rounds(self.current_project.path)
         self.feedback_round_combo.blockSignals(True)

@@ -53,7 +53,7 @@ class MigrationRequiredError(InvalidProjectGroupError):
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
         super().__init__(
-            "检测到旧项目结构，需要先备份并迁移为“产品迭代”结构。"
+            "检测到旧项目结构，需要迁移为“产品迭代”结构。"
         )
 
 
@@ -140,7 +140,6 @@ class ProjectStructureIssue:
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     group_root: Path
-    backup_root: Path
     conflicts: tuple[str, ...]
     report_path: Path
 
@@ -910,18 +909,12 @@ class ProjectService:
         if not self.requires_migration(root):
             raise InvalidProjectGroupError("当前项目组已经是 schema v3，无需重复迁移。")
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        backup = root.parent / f"{root.name}-迁移前备份-{stamp}"
-        suffix = 2
-        while backup.exists():
-            backup = root.parent / f"{root.name}-迁移前备份-{stamp}-{suffix}"
-            suffix += 1
         staging = root.parent / f".{root.name}.migrating-{uuid4().hex}"
         rollback = root.parent / f".{root.name}.migration-original-{uuid4().hex}"
         conflicts: list[str] = []
         replacing_group_directory = False
-        self._emit(progress, "正在创建迁移工作副本…")
+        self._emit(progress, "正在准备迁移项目组")
         try:
-            shutil.copytree(root, backup)
             shutil.copytree(root, staging)
             legacy_projects = self._project_paths(staging)
             legacy_projects.sort(
@@ -1060,21 +1053,37 @@ class ProjectService:
                 + "\n",
                 encoding="utf-8",
             )
-            self._emit(progress, "正在保留完整迁移前备份…")
+            self.load_project_group(staging)
+            self._emit(progress, "正在迁移项目组")
             replacing_group_directory = True
             root.rename(rollback)
             try:
                 staging.rename(root)
-            except Exception:
-                rollback.rename(root)
-                raise
-            self.load_project_group(root)
-            shutil.rmtree(rollback, ignore_errors=True)
-            return MigrationResult(root, backup, tuple(conflicts), root / report.name)
+            except Exception as replacement_error:
+                try:
+                    rollback.rename(root)
+                except Exception as restore_error:
+                    raise ProjectCreationError(
+                        "项目结构迁移未完成，自动恢复原项目失败。"
+                        f"原项目仍保留在：{rollback}。"
+                        "请不要删除或移动该目录。"
+                    ) from restore_error
+                raise replacement_error
+            shutil.rmtree(rollback)
+            return MigrationResult(root, tuple(conflicts), root / report.name)
         except Exception as exc:
             if not root.exists() and rollback.exists():
-                rollback.rename(root)
+                try:
+                    rollback.rename(root)
+                except Exception as restore_error:
+                    raise ProjectCreationError(
+                        "项目结构迁移未完成，自动恢复原项目失败。"
+                        f"原项目仍保留在：{rollback}。"
+                        "请不要删除或移动该目录。"
+                    ) from restore_error
             if isinstance(exc, InvalidProjectGroupError):
+                raise
+            if isinstance(exc, ProjectCreationError) and "自动恢复原项目失败" in str(exc):
                 raise
             raise ProjectCreationError(
                 self._migration_failure_message(exc, replacing_group_directory)
@@ -1096,9 +1105,9 @@ class ProjectService:
                 "或被其他程序占用。\n\n"
                 "请关闭已打开的项目文件夹，以及正在使用其中内容的程序，"
                 "然后重新点击“预览迁移”。\n\n"
-                "原项目和迁移前备份均已保留，不会丢失数据。"
+                "原项目保持不变，未创建备份。"
             )
-        return f"项目结构迁移失败，原目录和备份均已保留：{error}"
+        return f"项目结构迁移未完成，原项目保持不变，未创建备份：{error}"
 
     def preview_legacy_migration(self, group_root: Path) -> tuple[tuple[str, str], ...]:
         root = Path(group_root).expanduser().resolve()
@@ -1243,17 +1252,21 @@ class ProjectService:
 
     @staticmethod
     def _append_legacy_acceptance_summary(project: Path, report_root: Path) -> None:
-        reports = sorted(report_root.glob("验收-*.md"))
+        reports = sorted(path for path in report_root.rglob("*") if path.is_file())
         record = project / "项目记录.md"
-        summary = "旧验收文件已完整保留在项目组迁移前备份中。"
-        if reports:
-            try:
-                text = reports[-1].read_text(encoding="utf-8-sig").strip()
-                summary += "\n\n" + text[:2000]
-            except OSError:
-                pass
+        contents = [
+            (report.relative_to(report_root), report.read_text(encoding="utf-8-sig"))
+            for report in reports
+        ]
+        if not contents:
+            return
         with record.open("a", encoding="utf-8") as handle:
-            handle.write("\n\n## 历史完整验收摘要（结构迁移）\n\n" + summary + "\n")
+            handle.write("\n\n## 历史验收记录（结构迁移）\n")
+            for relative_path, text in contents:
+                handle.write(f"\n### 文件：{relative_path.as_posix()}\n\n")
+                handle.write(text)
+                if not text.endswith("\n"):
+                    handle.write("\n")
 
     def validate_removal_target(self, group_root: Path) -> Path:
         root = Path(group_root).expanduser().resolve()

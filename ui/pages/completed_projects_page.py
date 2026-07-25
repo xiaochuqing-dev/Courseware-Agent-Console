@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from services import ArchiveService, ProjectService
-from ui.widgets import Card, ElidedLabel
+from ui.widgets import Card, ElidedLabel, configure_wrapped_list
 
 
 class CompletedProjectsPage(QWidget):
@@ -81,6 +81,7 @@ class CompletedProjectsPage(QWidget):
         list_layout.addWidget(list_title)
         self.project_list = QListWidget()
         self.project_list.setObjectName("projectList")
+        configure_wrapped_list(self.project_list)
         self.project_list.currentItemChanged.connect(self._on_project_selected)
         list_layout.addWidget(self.project_list, 1)
         content.addWidget(list_card)
@@ -91,6 +92,7 @@ class CompletedProjectsPage(QWidget):
         details_layout.setSpacing(13)
         self.project_name_label = QLabel("选择一个已完成项目")
         self.project_name_label.setObjectName("sectionTitle")
+        self.project_name_label.setWordWrap(True)
         details_layout.addWidget(self.project_name_label)
         self.path_label = ElidedLabel()
         self.path_label.setObjectName("mutedText")
@@ -98,6 +100,7 @@ class CompletedProjectsPage(QWidget):
         details_layout.addWidget(self.path_label)
         self.latest_product_label = QLabel("最新产品：无")
         self.latest_product_label.setObjectName("mutedText")
+        self.latest_product_label.setWordWrap(True)
         details_layout.addWidget(self.latest_product_label)
         details_layout.addStretch()
 
@@ -167,14 +170,14 @@ class CompletedProjectsPage(QWidget):
             self._set_actions_enabled(False)
             return
         self.current_project = Path(current.data(Qt.ItemDataRole.UserRole))
-        self.project_name_label.setText(
-            self.archive_service.archived_project_name(self.current_project)
-        )
+        project_name = self.archive_service.archived_project_name(self.current_project)
+        self.project_name_label.setText(project_name)
+        self.project_name_label.setToolTip(project_name)
         self.path_label.setText(str(self.current_project))
         latest = self.archive_service.latest_product(self.current_project)
-        self.latest_product_label.setText(
-            f"最新产品：{latest.name}" if latest else "最新产品：无"
-        )
+        latest_product_text = f"最新产品：{latest.name}" if latest else "最新产品：无"
+        self.latest_product_label.setText(latest_product_text)
+        self.latest_product_label.setToolTip(latest_product_text)
         self._set_actions_enabled(True)
 
     def _set_actions_enabled(self, enabled: bool) -> None:

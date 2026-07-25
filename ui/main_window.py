@@ -406,7 +406,10 @@ class MainWindow(QMainWindow):
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Information)
         box.setWindowTitle("预览项目命名迁移")
-        box.setText("将先在项目组同级创建完整备份，再迁移为稳定 ID 和课题名称。")
+        box.setText(
+            "将把旧项目更新为稳定 ID 和课题名称。不会创建备份；"
+            "如果文件夹正在打开或被占用，原目录会保持不变。"
+        )
         box.setInformativeText(preview)
         box.setStyleSheet("QMessageBox QLabel { min-width: 520px; }")
         migrate_button = box.addButton("开始迁移", QMessageBox.ButtonRole.AcceptRole)
@@ -415,14 +418,14 @@ class MainWindow(QMainWindow):
         if box.clickedButton() is not migrate_button:
             return
         self._migration_in_progress = True
-        self.show_toast("正在备份并迁移项目组…", 3600)
+        self.show_toast("正在迁移项目组", 3600)
 
         def operation(progress):
             return self.project_service.migrate_legacy_group(group_path, progress)
 
         def succeeded(result) -> None:
             self.load_project_group(result.group_root)
-            self.show_toast(f"迁移完成，备份：{result.backup_root.name}", 5000)
+            self.show_toast("迁移完成", 5000)
 
         def failed(exc: BaseException) -> None:
             self.show_error(str(exc))
