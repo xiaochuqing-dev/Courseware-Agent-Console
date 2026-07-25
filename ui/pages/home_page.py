@@ -45,6 +45,7 @@ from ui.widgets import (
     FlowLayout,
     PendingFeedbackRow,
     PromptDialog,
+    SidebarCard,
     configure_wrapped_list,
 )
 
@@ -103,7 +104,7 @@ class HomePage(QWidget):
         root_layout.setContentsMargins(18, 18, 18, 20)
         root_layout.setSpacing(14)
 
-        sidebar = Card()
+        sidebar = SidebarCard()
         sidebar.setFixedWidth(240)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(15, 17, 15, 17)

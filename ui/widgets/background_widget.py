@@ -44,32 +44,74 @@ class BackgroundWidget(QWidget):
         painter.end()
 
     def _draw_decorations(self, painter: QPainter) -> None:
+        from PySide6.QtGui import QPainterPath
         w, h = self.width(), self.height()
 
-        # 左下角小叶片装饰（3-4片）
-        leaf_color = QColor(88, 204, 151, 31)
+        # 左下角流动波浪曲线（更明显）
+        wave_pen = QPen(QColor(85, 195, 185, 65), 2.8)
+        painter.setPen(wave_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        # 波浪1：左下角大弧线
+        wave1 = QPainterPath()
+        wave1.moveTo(0, h * 0.88)
+        wave1.cubicTo(
+            w * 0.08, h * 0.82,
+            w * 0.15, h * 0.90,
+            w * 0.22, h * 0.85
+        )
+        painter.drawPath(wave1)
+
+        # 波浪2：左下角第二条
+        wave2 = QPainterPath()
+        wave2.moveTo(0, h * 0.72)
+        wave2.cubicTo(
+            w * 0.10, h * 0.68,
+            w * 0.18, h * 0.76,
+            w * 0.26, h * 0.72
+        )
+        painter.drawPath(wave2)
+
+        # 波浪3：左下角第三条
+        wave3 = QPainterPath()
+        wave3.moveTo(0, h * 0.96)
+        wave3.cubicTo(
+            w * 0.06, h * 0.93,
+            w * 0.12, h * 0.98,
+            w * 0.18, h * 0.95
+        )
+        painter.drawPath(wave3)
+
+        # 右下角大叶片装饰（更明显）
+        leaf_color = QColor(88, 204, 151, 56)
         painter.setBrush(leaf_color)
         painter.setPen(Qt.PenStyle.NoPen)
 
-        # 叶片1
-        painter.drawEllipse(int(w * 0.05), int(h * 0.75), 32, 18)
-        # 叶片2
-        painter.drawEllipse(int(w * 0.03), int(h * 0.82), 28, 16)
-        # 叶片3
-        painter.drawEllipse(int(w * 0.08), int(h * 0.88), 24, 14)
+        # 右下大叶片1
+        painter.drawEllipse(int(w * 0.88), int(h * 0.88), 52, 28)
+        # 右下大叶片2
+        painter.drawEllipse(int(w * 0.92), int(h * 0.82), 46, 24)
+        # 右下小叶片3
+        painter.drawEllipse(int(w * 0.85), int(h * 0.94), 38, 20)
 
-        # 右下角小叶片
-        painter.drawEllipse(int(w * 0.92), int(h * 0.86), 26, 15)
-        painter.drawEllipse(int(w * 0.88), int(h * 0.92), 22, 13)
+        # 右上角小叶片点缀
+        painter.drawEllipse(int(w * 0.91), int(h * 0.14), 28, 16)
+        painter.drawEllipse(int(w * 0.95), int(h * 0.10), 22, 13)
 
-        # 中部区域散落圆点（6-8个）
+        # 左上角小叶片
+        painter.drawEllipse(int(w * 0.08), int(h * 0.12), 32, 18)
+        painter.drawEllipse(int(w * 0.05), int(h * 0.18), 28, 15)
+
+        # 中部区域散落圆点（更多更明显）
         dot_positions = [
-            (0.38, 0.25, 5, 41),
-            (0.52, 0.32, 4, 31),
-            (0.45, 0.68, 6, 36),
-            (0.62, 0.48, 4, 28),
-            (0.73, 0.62, 5, 33),
-            (0.58, 0.78, 4, 26),
+            (0.38, 0.25, 6, 51),
+            (0.52, 0.32, 5, 41),
+            (0.45, 0.68, 7, 46),
+            (0.62, 0.48, 5, 38),
+            (0.73, 0.62, 6, 43),
+            (0.58, 0.78, 5, 36),
+            (0.68, 0.38, 4, 33),
+            (0.42, 0.52, 5, 40),
         ]
 
         for x_ratio, y_ratio, radius, alpha in dot_positions:
@@ -80,13 +122,12 @@ class BackgroundWidget(QWidget):
                 radius, radius
             )
 
-        # 轻柔波浪曲线（2条）
-        pen = QPen(QColor(125, 190, 180, 20), 1.5)
-        painter.setPen(pen)
+        # 中部轻柔装饰曲线
+        deco_pen = QPen(QColor(125, 190, 180, 28), 1.8)
+        painter.setPen(deco_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
-        # 波浪线1：中部偏上
-        from PySide6.QtGui import QPainterPath
+        # 中部曲线1
         path1 = QPainterPath()
         path1.moveTo(w * 0.35, h * 0.28)
         path1.cubicTo(
@@ -96,13 +137,13 @@ class BackgroundWidget(QWidget):
         )
         painter.drawPath(path1)
 
-        # 波浪线2：中部偏右
+        # 中部曲线2
         path2 = QPainterPath()
-        path2.moveTo(w * 0.52, h * 0.52)
+        path2.moveTo(w * 0.52, h * 0.55)
         path2.cubicTo(
-            w * 0.62, h * 0.48,
-            w * 0.68, h * 0.58,
-            w * 0.78, h * 0.54
+            w * 0.62, h * 0.50,
+            w * 0.68, h * 0.60,
+            w * 0.78, h * 0.56
         )
         painter.drawPath(path2)
 
