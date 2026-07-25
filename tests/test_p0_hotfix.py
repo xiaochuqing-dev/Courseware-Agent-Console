@@ -134,13 +134,13 @@ def test_real_six_project_creation_preserves_mapping(
     page._create_project_group()
     wait_until(app, lambda: bool(created))
     assert created == [tmp_path / "六项目热修复验收"]
-    for index, source in enumerate(expected_mapping, start=1):
-        copied_files = list(
-            (created[0] / f"项目{index}" / "原始需求").iterdir()
-        )
-        assert copied_files == [
-            created[0] / f"项目{index}" / "原始需求" / source.name
-        ]
+    created_group = ProjectService(resource_root).load_project_group(created[0])
+    assert [project.display_name for project in created_group.projects] == [
+        source.stem for source in expected_mapping
+    ]
+    for project, source in zip(created_group.projects, expected_mapping):
+        copied_files = list((project.path / "原始需求").iterdir())
+        assert copied_files == [project.path / "原始需求" / source.name]
         assert copied_files[0].read_bytes() == source.read_bytes()
     page.deleteLater()
     app.processEvents()
@@ -264,11 +264,11 @@ def test_restart_restores_last_selected_project_and_invalid_name_falls_back(
     ini_path = tmp_path / "restore.ini"
     settings = SettingsService(QSettings(str(ini_path), QSettings.Format.IniFormat))
     settings.save_recent_group_path(group.root)
-    settings.save_last_selected_project(group.root, "项目3")
+    settings.save_last_selected_project(group.root, group.projects[2].project_id)
 
     first = MainWindow(project_service, TaskService(resource_root), settings)
     assert first.home_page.current_project is not None
-    assert first.home_page.current_project.name == "项目3"
+    assert first.home_page.current_project.project_id == group.projects[2].project_id
     first.home_page.project_list.setCurrentRow(1)
     first.close()
     app.processEvents()
@@ -282,7 +282,7 @@ def test_restart_restores_last_selected_project_and_invalid_name_falls_back(
         reopened_settings,
     )
     assert reopened.home_page.current_project is not None
-    assert reopened.home_page.current_project.name == "项目2"
+    assert reopened.home_page.current_project.project_id == group.projects[1].project_id
     reopened.close()
     app.processEvents()
 
@@ -293,7 +293,7 @@ def test_restart_restores_last_selected_project_and_invalid_name_falls_back(
         reopened_settings,
     )
     assert fallback.home_page.current_project is not None
-    assert fallback.home_page.current_project.name == "项目1"
+    assert fallback.home_page.current_project.project_id == group.projects[0].project_id
     fallback.close()
     app.processEvents()
 

@@ -26,11 +26,13 @@ def test_empty_special_requirement_still_generates_task(tmp_path: Path) -> None:
     target = service.generate_first_build_task(group.projects[0].path, "")
     content = target.read_text(encoding="utf-8")
 
-    assert "项目：项目1" in content
+    assert "项目显示名：source" in content
+    assert "预期输出：产品迭代/source.html" in content
+    assert "产物 ID：" in content
     assert "任务类型：首次制作" in content
     assert "## 特殊要求\n\n无" in content
     assert "AGENT任务规则.md" in content
-    assert service.execution_prompt("项目1") == "执行项目1当前任务。"
+    assert service.execution_prompt("source") == "执行source当前任务。"
 
 
 def test_recent_project_group_path_round_trip(tmp_path: Path) -> None:
@@ -106,9 +108,9 @@ def test_main_window_refreshes_active_and_completed_lists_after_archive(
         window.home_page.project_list.item(index).text()
         for index in range(window.home_page.project_list.count())
     ]
-    assert names == ["项目1", "项目2"]
+    assert names == ["source-1", "source-2"]
     window.show_completed_projects()
     assert window.completed_page.project_list.count() == 1
-    assert window.completed_page.project_list.item(0).text() == "项目3"
+    assert window.completed_page.project_list.item(0).text() == "source-3"
     window.close()
     app.processEvents()

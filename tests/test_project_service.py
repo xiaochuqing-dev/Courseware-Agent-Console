@@ -33,17 +33,19 @@ def test_create_three_projects_with_explicit_mapping(
         "九年级", 3, tmp_path, mappings, tool_binding(project_service.resource_root)
     )
 
-    assert [project.name for project in group.projects] == ["项目1", "项目2", "项目3"]
+    assert [project.name for project in group.projects] == ["Z", "A", "M"]
     for index, source in enumerate(mappings, start=1):
-        copied = group.root / f"项目{index}" / "原始需求" / source.name
+        project = group.projects[index - 1]
+        copied = project.path / "原始需求" / source.name
         assert copied.read_bytes() == source.read_bytes()
-        assert (group.root / f"项目{index}" / "客户反馈").is_dir()
-        assert (group.root / f"项目{index}" / "产品迭代").is_dir()
-        assert not (group.root / f"项目{index}" / "工作文件").exists()
-        assert not (group.root / f"项目{index}" / "最终交付").exists()
-        assert not (group.root / f"项目{index}" / "验收记录").exists()
-        assert (group.root / f"项目{index}" / "当前任务.md").is_file()
-        assert (group.root / f"项目{index}" / "项目记录.md").is_file()
+        assert (project.path / "客户反馈").is_dir()
+        assert (project.path / "产品迭代").is_dir()
+        assert not (project.path / "工作文件").exists()
+        assert not (project.path / "最终交付").exists()
+        assert not (project.path / "验收记录").exists()
+        assert (project.path / "当前任务.md").is_file()
+        assert (project.path / "项目记录.md").is_file()
+        assert (project.path / "项目配置.json").is_file()
 
     for tool_name in project_service.REQUIRED_PUBLIC_TOOLS:
         assert (group.root / "公共工具" / tool_name).read_bytes() == (

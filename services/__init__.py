@@ -3,7 +3,9 @@ from .archive_service import (
     ArchiveError,
     ArchiveService,
     NoProductVersionError,
+    ProductNotice,
 )
+from .identity_service import read_courseware_meta, sanitize_project_name
 from .acceptance_service import AcceptanceItem, AcceptanceReport, AcceptanceService
 from .feedback_service import FeedbackSaveResult, FeedbackService, PendingFeedback
 from .project_service import (
@@ -38,6 +40,7 @@ __all__ = [
     "MigrationResult",
     "NoProductVersionError",
     "PendingFeedback",
+    "ProductNotice",
     "ProjectCreationError",
     "ProjectStructureIssue",
     "ProjectService",
@@ -50,4 +53,6 @@ __all__ = [
     "ToolValidationResult",
     "TaskService",
     "ValidationError",
+    "read_courseware_meta",
+    "sanitize_project_name",
 ]

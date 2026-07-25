@@ -123,6 +123,18 @@ QPushButton[role="quiet"]:hover {
     background: rgba(218, 241, 233, 175);
 }
 
+QWidget#noticeBanner {
+    color: #5e4a19;
+    background: rgba(255, 248, 221, 242);
+    border: 1px solid rgba(190, 150, 55, 110);
+    border-radius: 6px;
+}
+
+QWidget#noticeBanner QPushButton {
+    min-height: 30px;
+    padding: 0 10px;
+}
+
 QPushButton[danger="true"] {
     color: #9b4747;
     background: transparent;

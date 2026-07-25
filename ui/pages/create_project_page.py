@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import os
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -49,6 +51,7 @@ class CreateProjectPage(QWidget):
         self.setObjectName("page")
         self.project_service = project_service
         self.json_files: list[Path] = []
+        self.project_names_by_path: dict[str, str] = {}
         self.tool_inputs: dict[str, QLineEdit] = {}
         self.tool_status_labels: dict[str, QLabel] = {}
         self._creation_in_progress = False
@@ -229,7 +232,15 @@ class CreateProjectPage(QWidget):
         remove_button.setToolTip("删除所选 JSON")
         remove_button.clicked.connect(self._remove_mapping)
         mapping_title_row.addWidget(remove_button)
+        edit_button = QPushButton("编辑名称")
+        edit_button.setToolTip("编辑所选项目名称")
+        edit_button.clicked.connect(self._edit_mapping_name)
+        mapping_title_row.addWidget(edit_button)
         mapping_layout.addLayout(mapping_title_row)
+
+        mapping_columns = QLabel("序号  |  项目名称（最终目录）  |  原始 JSON")
+        mapping_columns.setObjectName("fieldLabel")
+        mapping_layout.addWidget(mapping_columns)
 
         self.mapping_list = QListWidget()
         self.mapping_list.setObjectName("mappingList")
@@ -463,6 +474,24 @@ class CreateProjectPage(QWidget):
                 ignored += 1
                 continue
             self.json_files.append(candidate)
+            base_name = candidate.stem
+            project_name = base_name
+            counter = 2
+            used_names = {
+                value.casefold() for value in self.project_names_by_path.values()
+            }
+            used_directories = {
+                self.project_service.sanitize_project_name(value).casefold()
+                for value in self.project_names_by_path.values()
+            }
+            while (
+                project_name.casefold() in used_names
+                or self.project_service.sanitize_project_name(project_name).casefold()
+                in used_directories
+            ):
+                project_name = f"{base_name}（{counter}）"
+                counter += 1
+            self.project_names_by_path[key] = project_name
             existing.add(key)
             added += 1
         self._refresh_mapping_list()
@@ -496,10 +525,52 @@ class CreateProjectPage(QWidget):
     def _refresh_mapping_list(self) -> None:
         self.mapping_list.clear()
         for index, path in enumerate(self.json_files, start=1):
-            item = QListWidgetItem(f"项目{index}    →    {path.name}")
-            item.setToolTip(str(path))
+            key = self._path_key(path)
+            display_name = self.project_names_by_path.setdefault(key, path.stem)
+            directory_name = self.project_service.sanitize_project_name(display_name)
+            directory_hint = (
+                "" if directory_name == display_name else f"（目录：{directory_name}）"
+            )
+            item = QListWidgetItem(
+                f"{index}  |  {display_name}{directory_hint}  |  {path.name}"
+            )
+            item.setToolTip(
+                f"项目名称：{display_name}\n最终目录：{directory_name}\n原始 JSON：{path}"
+            )
             self.mapping_list.addItem(item)
         self._update_json_summary()
+
+    def _edit_mapping_name(self) -> None:
+        row = self.mapping_list.currentRow()
+        if row < 0 or row >= len(self.json_files):
+            self._show_error("请先选择一个 JSON 映射。")
+            return
+        path = self.json_files[row]
+        key = self._path_key(path)
+        current = self.project_names_by_path.get(key, path.stem)
+        value, accepted = QInputDialog.getText(
+            self,
+            "编辑项目名称",
+            "项目名称",
+            QLineEdit.EchoMode.Normal,
+            current,
+        )
+        if not accepted:
+            return
+        name = value.strip()
+        if not name:
+            self._show_error("项目名称不能为空。")
+            return
+        self.project_names_by_path[key] = name
+        self._hide_error()
+        self._refresh_mapping_list()
+        self.mapping_list.setCurrentRow(row)
+
+    def project_names(self) -> list[str]:
+        return [
+            self.project_names_by_path.get(self._path_key(path), path.stem)
+            for path in self.json_files
+        ]
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -530,12 +601,21 @@ class CreateProjectPage(QWidget):
 
     def _update_create_state(self) -> None:
         json_ready = len(self.json_files) == self.count_input.value()
+        names_ready = False
+        if json_ready:
+            try:
+                self.project_service.prepare_project_names(
+                    self.json_files, self.project_names()
+                )
+                names_ready = True
+            except Exception:
+                names_ready = False
         tools_ready = bool(
             self._tool_validation_result
             and self._validated_binding_key == self._binding_key()
         )
         self.create_button.setEnabled(
-            bool(json_ready and tools_ready and not self._creation_in_progress)
+            bool(json_ready and names_ready and tools_ready and not self._creation_in_progress)
         )
 
     def _set_json_status(self, message: str, warning: bool = False) -> None:
@@ -574,6 +654,13 @@ class CreateProjectPage(QWidget):
             self._show_error("公共工具尚未完成验证，请稍候或重新选择文件。")
             self._prevalidation_timer.start()
             return
+        try:
+            self.project_service.prepare_project_names(
+                self.json_files, self.project_names()
+            )
+        except Exception as exc:
+            self._show_error(str(exc))
+            return
         logger.info("Project creation started; project_count=%d", required)
         self._creation_in_progress = True
         self._set_creation_busy(True, "正在检查项目名称和 JSON 映射…")
@@ -581,6 +668,19 @@ class CreateProjectPage(QWidget):
         project_count = self.count_input.value()
         location = Path(self.location_input.text().strip())
         json_files = list(self.json_files)
+        project_names = self.project_names()
+        source_hashes = {
+            self._path_key(path): self.project_service.file_sha256(path)
+            for path in json_files
+        }
+        try:
+            for path in json_files:
+                json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            self._creation_in_progress = False
+            self._set_creation_busy(False)
+            self._show_error(f"JSON 文件无法解析：{exc}")
+            return
 
         def operation(progress):
             return self.project_service.create_project_group(
@@ -591,6 +691,9 @@ class CreateProjectPage(QWidget):
                 tool_binding=tool_binding,
                 validation_result=validation_result,
                 progress=progress,
+                project_names=project_names,
+                source_hashes=source_hashes,
+                json_validation_complete=True,
             )
 
         def succeeded(group) -> None:

@@ -189,13 +189,13 @@ def test_complete_two_round_feedback_acceptance_and_archive(phase2_group) -> Non
     assert archive.latest_product(project).name == "第2轮修改.html"
 
     prompt = PromptService(resource_root, archive).product_acceptance_prompt(project)
-    assert "项目“项目3”" in prompt
+    assert "项目“需求-3”" in prompt
     assert "产品迭代/第2轮修改.html" in prompt
     assert "不得自动把项目标记为已完成" in prompt
 
-    destination = archive.archive_project(group.root, project.name)
-    assert destination == group.root.parent / "已完成项目" / "九年级" / "项目3"
+    destination = archive.archive_project(group.root, group.projects[2].project_id)
+    assert destination == group.root.parent / "已完成项目" / "九年级" / "需求-3"
     assert not project.exists()
     assert archive.archived_projects(group.root, "九年级")[-1] == destination
     active = ProjectService(resource_root).load_project_group(group.root)
-    assert [entry.name for entry in active.projects] == ["项目1", "项目2"]
+    assert [entry.name for entry in active.projects] == ["需求-1", "需求-2"]

@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -16,6 +17,16 @@ from uuid import uuid4
 
 from models import ProjectEntry, ProjectGroup
 
+from .identity_service import (
+    PROJECT_CONFIG_NAME,
+    file_sha256,
+    read_json_object,
+    sanitize_project_name,
+    unique_project_names,
+    valid_uuid,
+    write_courseware_meta,
+    write_json_object,
+)
 from .process_utils import run_hidden_process
 from .resource_paths import bundled_resource_root
 
@@ -145,6 +156,8 @@ class ProjectService:
         "validate": "validate-tool.js",
     }
     MANIFEST_NAME = "项目组配置.json"
+    PROJECT_CONFIG_NAME = PROJECT_CONFIG_NAME
+    MANIFEST_SCHEMA_VERSION = 3
     PRODUCT_DIRECTORY = "产品迭代"
     REQUIRED_PROJECT_DIRECTORIES = ("原始需求", "客户反馈", PRODUCT_DIRECTORY)
     LEGACY_DIRECTORIES = ("工作文件", "最终交付", "验收记录")
@@ -170,11 +183,9 @@ class ProjectService:
 
     @staticmethod
     def file_sha256(path: Path) -> str:
-        digest = hashlib.sha256()
-        with Path(path).open("rb") as handle:
-            for block in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(block)
-        return digest.hexdigest().upper()
+        return file_sha256(path)
+
+    sanitize_project_name = staticmethod(sanitize_project_name)
 
     @staticmethod
     def _emit(progress: ProgressCallback | None, message: str) -> None:
@@ -301,6 +312,8 @@ class ProjectService:
         tool_binding: ToolBinding | None,
         validation_result: ToolValidationResult | None = None,
         progress: ProgressCallback | None = None,
+        project_names: list[str] | tuple[str, ...] | None = None,
+        json_validation_complete: bool = False,
     ) -> Path:
         self._emit(progress, "正在检查项目名称和 JSON 映射…")
         name = group_name.strip()
@@ -319,7 +332,11 @@ class ProjectService:
         target = parent / name
         if target.exists():
             raise TargetExistsError(target)
-        longest_target = target / f"项目{project_count}" / self.PRODUCT_DIRECTORY / "第999轮修改.html"
+        prepared_names = self.prepare_project_names(json_files, project_names, target)
+        longest_directory = max((item[1] for item in prepared_names), key=len, default="项目")
+        longest_target = (
+            target / longest_directory / self.PRODUCT_DIRECTORY / f"{longest_directory}（999）.html"
+        )
         if len(str(longest_target.resolve())) >= 240:
             raise ValidationError(
                 "目标路径过长，后续保存版本可能失败。请缩短项目组名称或选择更靠近磁盘根目录的位置："
@@ -347,13 +364,40 @@ class ProjectService:
             resolved_files.append(resolved)
         if len(set(resolved_files)) != len(resolved_files):
             raise ValidationError("每个项目必须映射唯一的 JSON 文件。")
-        for path in resolved_files:
-            try:
-                with path.open("r", encoding="utf-8-sig") as handle:
-                    json.load(handle)
-            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-                raise ValidationError(f"JSON 文件无法解析：{path.name}（{exc}）") from exc
+        if not json_validation_complete:
+            for path in resolved_files:
+                try:
+                    with path.open("r", encoding="utf-8-sig") as handle:
+                        json.load(handle)
+                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                    raise ValidationError(f"JSON 文件无法解析：{path.name}（{exc}）") from exc
         return target
+
+    def prepare_project_names(
+        self,
+        json_files: list[Path] | tuple[Path, ...],
+        project_names: list[str] | tuple[str, ...] | None = None,
+        target_root: Path | None = None,
+    ) -> tuple[tuple[str, str], ...]:
+        raw_names = (
+            [Path(path).stem for path in json_files]
+            if project_names is None
+            else [str(value).strip() for value in project_names]
+        )
+        if len(raw_names) != len(json_files):
+            raise ValidationError("项目名称数量与 JSON 数量不一致。")
+        if any(not value for value in raw_names):
+            raise ValidationError("项目名称不能为空。")
+        max_length = 80
+        if target_root is not None:
+            remaining = 220 - len(str(Path(target_root).resolve())) - len(self.PRODUCT_DIRECTORY) - 24
+            max_length = max(24, min(80, remaining))
+        prepared = unique_project_names(raw_names, max_length)
+        if project_names is not None and any(
+            display != raw for (display, _directory), raw in zip(prepared, raw_names)
+        ):
+            raise ValidationError("项目名称必须唯一，且清洗后的目录名称也不能重复。")
+        return prepared
 
     def create_project_group(
         self,
@@ -364,6 +408,9 @@ class ProjectService:
         tool_binding: ToolBinding | None = None,
         validation_result: ToolValidationResult | None = None,
         progress: ProgressCallback | None = None,
+        project_names: list[str] | tuple[str, ...] | None = None,
+        source_hashes: dict[str, str] | None = None,
+        json_validation_complete: bool = False,
     ) -> ProjectGroup:
         if validation_result is None:
             validation_result = self.validate_tool_binding(tool_binding, progress)
@@ -375,6 +422,8 @@ class ProjectService:
             tool_binding,
             validation_result,
             progress,
+            project_names,
+            json_validation_complete,
         )
         assert tool_binding is not None
         target_key = os.path.normcase(str(target.resolve()))
@@ -398,22 +447,23 @@ class ProjectService:
             for role, name in self.TOOL_ROLES.items():
                 shutil.copy2(tool_binding.paths()[role], tools_target / name)
 
+            group_id = str(uuid4())
+            prepared_names = self.prepare_project_names(json_files, project_names, target)
             manifest = {
-                "schema_version": 2,
+                "schema_version": self.MANIFEST_SCHEMA_VERSION,
                 "group_id": str(uuid4()),
                 "group_name": target.name,
                 "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
                 "tools": validation_result.metadata(),
                 "product_directory": self.PRODUCT_DIRECTORY,
+                "projects": [],
             }
-            (staging / self.MANIFEST_NAME).write_text(
-                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-
             self._emit(progress, "正在复制公共工具和原始需求…")
-            for index, json_path in enumerate(json_files, start=1):
-                project_root = staging / f"项目{index}"
+            def create_project(arguments) -> dict[str, object]:
+                index, json_path, names = arguments
+                display_name, directory_name = names
+                project_id = str(uuid4())
+                project_root = staging / directory_name
                 source_root = project_root / "原始需求"
                 source_root.mkdir(parents=True)
                 (project_root / "客户反馈").mkdir()
@@ -423,6 +473,56 @@ class ProjectService:
                 (project_root / "项目记录.md").write_text(
                     "# 项目记录\n\n暂无执行记录。\n", encoding="utf-8"
                 )
+                project_config = {
+                    "schema_version": 1,
+                    "project_id": project_id,
+                    "order": index,
+                    "display_name": display_name,
+                    "directory_name": directory_name,
+                    "source_json": {
+                        "source_id": str(uuid4()),
+                        "file_name": Path(json_path).name,
+                        "sha256": (
+                            source_hashes.get(
+                                os.path.normcase(str(Path(json_path).resolve())), ""
+                            )
+                            if source_hashes
+                            else ""
+                        )
+                        or self.file_sha256(json_path),
+                    },
+                    "product_base_name": display_name,
+                    "known_directory_names": [directory_name],
+                    "artifacts": [],
+                }
+                (project_root / self.PROJECT_CONFIG_NAME).write_text(
+                    json.dumps(project_config, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                return {
+                    "project_id": project_id,
+                    "order": index,
+                    "display_name": display_name,
+                    "directory_name": directory_name,
+                }
+
+            project_arguments = list(
+                (
+                    index,
+                    json_path,
+                    names,
+                )
+                for index, (json_path, names) in enumerate(
+                    zip(json_files, prepared_names), start=1
+                )
+            )
+            with ThreadPoolExecutor(max_workers=min(4, len(project_arguments))) as executor:
+                manifest["projects"] = list(executor.map(create_project, project_arguments))
+            manifest["group_id"] = group_id
+            (staging / self.MANIFEST_NAME).write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
             if target.exists():
                 raise TargetExistsError(target)
             staging.rename(target)
@@ -437,7 +537,17 @@ class ProjectService:
             with self._creation_lock:
                 self._creating_targets.discard(target_key)
 
-        return self.load_project_group(target)
+        projects = tuple(
+            ProjectEntry(
+                index=int(record["order"]),
+                name=str(record["display_name"]),
+                path=(target / str(record["directory_name"])).resolve(),
+                project_id=str(record["project_id"]),
+                directory_name=str(record["directory_name"]),
+            )
+            for record in manifest["projects"]
+        )
+        return ProjectGroup(root=target.resolve(), projects=projects, group_id=group_id)
 
     def read_manifest(self, group_root: Path) -> dict:
         path = Path(group_root).resolve() / self.MANIFEST_NAME
@@ -455,7 +565,7 @@ class ProjectService:
             manifest = self.read_manifest(group_root)
         except InvalidProjectGroupError:
             return False
-        if int(manifest.get("schema_version", 1) or 1) < 2:
+        if int(manifest.get("schema_version", 1) or 1) < self.MANIFEST_SCHEMA_VERSION:
             return True
         return any(
             (project / legacy).exists()
@@ -473,21 +583,220 @@ class ProjectService:
             raise InvalidProjectGroupError(f"所选目录缺少 {self.MANIFEST_NAME}。")
         if not allow_legacy and self.requires_migration(resolved_root):
             raise MigrationRequiredError(resolved_root)
-        projects = [
-            ProjectEntry(index=int(self.PROJECT_PATTERN.fullmatch(path.name).group(1)), name=path.name, path=path)
-            for path in self._project_paths(resolved_root)
-        ]
-        projects.sort(key=lambda item: item.index)
-        return ProjectGroup(root=resolved_root, projects=tuple(projects))
+        manifest = self.read_manifest(resolved_root)
+        schema_version = int(manifest.get("schema_version", 1) or 1)
+        if schema_version < self.MANIFEST_SCHEMA_VERSION:
+            projects = [
+                ProjectEntry(
+                    index=int(self.PROJECT_PATTERN.fullmatch(path.name).group(1)),
+                    name=path.name,
+                    path=path,
+                    directory_name=path.name,
+                )
+                for path in self._legacy_project_paths(resolved_root)
+            ]
+            projects.sort(key=lambda item: item.index)
+            return ProjectGroup(
+                root=resolved_root,
+                projects=tuple(projects),
+                group_id=str(manifest.get("group_id", "")),
+                migration_required=True,
+            )
+
+        configured = manifest.get("projects")
+        if not isinstance(configured, list):
+            raise InvalidProjectGroupError("项目组配置缺少 projects 索引。")
+        scanned: dict[str, tuple[Path, dict]] = {}
+        for path in resolved_root.iterdir():
+            config_path = path / self.PROJECT_CONFIG_NAME
+            if not path.is_dir() or not config_path.is_file():
+                continue
+            try:
+                config = read_json_object(config_path)
+            except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+                raise InvalidProjectGroupError(f"项目配置无法读取：{config_path}（{exc}）") from exc
+            project_id = str(config.get("project_id", ""))
+            if not valid_uuid(project_id):
+                raise InvalidProjectGroupError(f"项目配置缺少有效 project_id：{config_path}")
+            if project_id in scanned:
+                raise InvalidProjectGroupError(f"发现重复 project_id：{project_id}")
+            scanned[project_id] = (path.resolve(), config)
+
+        projects: list[ProjectEntry] = []
+        normalized_records: list[dict[str, object]] = []
+        known_ids: set[str] = set()
+        manifest_changed = False
+        for raw_record in configured:
+            if not isinstance(raw_record, dict):
+                manifest_changed = True
+                continue
+            project_id = str(raw_record.get("project_id", ""))
+            match = scanned.get(project_id)
+            if match is None:
+                continue
+            path, config = match
+            known_ids.add(project_id)
+            order = int(config.get("order", raw_record.get("order", len(projects) + 1)) or 0)
+            display_name = str(
+                config.get("display_name") or raw_record.get("display_name") or path.name
+            ).strip()
+            recorded_directory = str(
+                config.get("directory_name") or raw_record.get("directory_name") or path.name
+            )
+            renamed_from = ""
+            if recorded_directory != path.name:
+                renamed_from = recorded_directory
+                known = [str(value) for value in config.get("known_directory_names", [])]
+                if recorded_directory and recorded_directory not in known:
+                    known.append(recorded_directory)
+                if path.name not in known:
+                    known.append(path.name)
+                config["known_directory_names"] = known
+                config["directory_name"] = path.name
+                config["directory_rename_notice"] = {
+                    "old_name": recorded_directory,
+                    "new_name": path.name,
+                }
+                write_json_object(path / self.PROJECT_CONFIG_NAME, config)
+                manifest_changed = True
+            normalized = {
+                "project_id": project_id,
+                "order": order,
+                "display_name": display_name,
+                "directory_name": path.name,
+            }
+            normalized_records.append(normalized)
+            if any(raw_record.get(key) != value for key, value in normalized.items()):
+                manifest_changed = True
+            projects.append(
+                ProjectEntry(
+                    index=order,
+                    name=display_name,
+                    path=path,
+                    project_id=project_id,
+                    directory_name=path.name,
+                    renamed_from=renamed_from,
+                )
+            )
+
+        for project_id, (path, config) in scanned.items():
+            if project_id in known_ids:
+                continue
+            order = int(config.get("order", len(projects) + 1) or len(projects) + 1)
+            display_name = str(config.get("display_name") or path.name).strip()
+            projects.append(
+                ProjectEntry(
+                    index=order,
+                    name=display_name,
+                    path=path,
+                    project_id=project_id,
+                    directory_name=path.name,
+                )
+            )
+            normalized_records.append(
+                {
+                    "project_id": project_id,
+                    "order": order,
+                    "display_name": display_name,
+                    "directory_name": path.name,
+                }
+            )
+            manifest_changed = True
+
+        projects.sort(key=lambda item: (item.index, item.display_name.casefold()))
+        normalized_records.sort(key=lambda item: (int(item["order"]), str(item["display_name"]).casefold()))
+        if manifest_changed:
+            manifest["projects"] = normalized_records
+            write_json_object(resolved_root / self.MANIFEST_NAME, manifest)
+        return ProjectGroup(
+            root=resolved_root,
+            projects=tuple(projects),
+            group_id=str(manifest.get("group_id", "")),
+        )
 
     def _project_paths(self, root: Path) -> list[Path]:
         if not Path(root).is_dir():
             return []
-        return [
+        configured = [
+            path
+            for path in Path(root).iterdir()
+            if path.is_dir() and (path / self.PROJECT_CONFIG_NAME).is_file()
+        ]
+        legacy = [
             path
             for path in Path(root).iterdir()
             if path.is_dir() and self.PROJECT_PATTERN.fullmatch(path.name)
         ]
+        return list(dict.fromkeys([*configured, *legacy]))
+
+    def _legacy_project_paths(self, root: Path) -> list[Path]:
+        return [
+            path
+            for path in Path(root).iterdir()
+            if path.is_dir() and self.PROJECT_PATTERN.fullmatch(path.name)
+        ] if Path(root).is_dir() else []
+
+    def read_project_config(self, project_root: Path) -> dict:
+        path = Path(project_root).resolve() / self.PROJECT_CONFIG_NAME
+        try:
+            config = read_json_object(path)
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+            raise InvalidProjectGroupError(f"项目配置无法读取：{path}（{exc}）") from exc
+        if not valid_uuid(config.get("project_id")):
+            raise InvalidProjectGroupError(f"项目配置缺少有效 project_id：{path}")
+        return config
+
+    def write_project_config(self, project_root: Path, config: dict) -> None:
+        write_json_object(Path(project_root).resolve() / self.PROJECT_CONFIG_NAME, config)
+
+    def resolve_directory_rename(
+        self, group_root: Path, project_id: str, adopt_display_name: bool
+    ) -> ProjectEntry:
+        group = self.load_project_group(group_root, allow_legacy=True)
+        project = next((item for item in group.projects if item.project_id == project_id), None)
+        if project is None:
+            raise InvalidProjectGroupError("无法按 project_id 找到项目。")
+        config = self.read_project_config(project.path)
+        notice = config.pop("directory_rename_notice", None)
+        if adopt_display_name:
+            previous_base = str(config.get("product_base_name", ""))
+            config["display_name"] = project.path.name
+            if previous_base and previous_base != project.path.name:
+                config["product_base_name_notice"] = {
+                    "old_name": previous_base,
+                    "new_name": project.path.name,
+                }
+        self.write_project_config(project.path, config)
+        manifest = self.read_manifest(group.root)
+        for record in manifest.get("projects", []):
+            if isinstance(record, dict) and str(record.get("project_id")) == project_id:
+                record["directory_name"] = project.path.name
+                if adopt_display_name:
+                    record["display_name"] = project.path.name
+        write_json_object(group.root / self.MANIFEST_NAME, manifest)
+        refreshed = self.load_project_group(group.root)
+        result = next(item for item in refreshed.projects if item.project_id == project_id)
+        if notice:
+            record_path = result.path / "项目记录.md"
+            with record_path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    f"\n- 项目文件夹重命名：{notice.get('old_name', '')} → "
+                    f"{notice.get('new_name', result.path.name)}\n"
+                    f"- project_id 未变化：{project_id}\n"
+                )
+        return result
+
+    def resolve_product_base_name(
+        self, project_root: Path, use_new_name: bool
+    ) -> None:
+        project = Path(project_root).resolve()
+        config = self.read_project_config(project)
+        notice = config.pop("product_base_name_notice", None)
+        if use_new_name and isinstance(notice, dict):
+            config["product_base_name"] = str(
+                notice.get("new_name") or config.get("display_name")
+            )
+        self.write_project_config(project, config)
 
     def validate_group_resources(self, group_root: Path) -> None:
         root = Path(group_root).resolve()
@@ -499,7 +808,7 @@ class ProjectService:
             if not path.is_file():
                 raise FileNotFoundError(f"公共工具缺失：{path}。请从项目组备份恢复。")
         manifest = self.read_manifest(root)
-        if int(manifest.get("schema_version", 1) or 1) < 2:
+        if int(manifest.get("schema_version", 1) or 1) < self.MANIFEST_SCHEMA_VERSION:
             raise MigrationRequiredError(root)
         if manifest.get("product_directory") != self.PRODUCT_DIRECTORY:
             raise InvalidProjectGroupError("项目组配置中的产品目录不是“产品迭代”。")
@@ -599,7 +908,7 @@ class ProjectService:
         if not root.is_dir():
             raise InvalidProjectGroupError(f"项目组目录不存在：{root}")
         if not self.requires_migration(root):
-            raise InvalidProjectGroupError("当前项目组已经是 schema v2，无需重复迁移。")
+            raise InvalidProjectGroupError("当前项目组已经是 schema v3，无需重复迁移。")
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         backup = root.parent / f"{root.name}-迁移前备份-{stamp}"
         suffix = 2
@@ -613,7 +922,16 @@ class ProjectService:
         try:
             shutil.copytree(root, backup)
             shutil.copytree(root, staging)
-            for project in self._project_paths(staging):
+            legacy_projects = self._project_paths(staging)
+            legacy_projects.sort(
+                key=lambda path: (
+                    int(self.PROJECT_PATTERN.fullmatch(path.name).group(1))
+                    if self.PROJECT_PATTERN.fullmatch(path.name)
+                    else 999999,
+                    path.name.casefold(),
+                )
+            )
+            for project in legacy_projects:
                 product = project / self.PRODUCT_DIRECTORY
                 product.mkdir(exist_ok=True)
                 for legacy_name in ("工作文件", "最终交付"):
@@ -627,10 +945,102 @@ class ProjectService:
                     self._append_legacy_acceptance_summary(project, old_reports)
                     shutil.rmtree(old_reports)
 
+            source_names: list[str] = []
+            for project in legacy_projects:
+                existing_config = None
+                try:
+                    existing_config = read_json_object(project / self.PROJECT_CONFIG_NAME)
+                except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+                    pass
+                json_files = sorted((project / "原始需求").glob("*.json"))
+                source_names.append(
+                    str(existing_config.get("display_name"))
+                    if existing_config and valid_uuid(existing_config.get("project_id"))
+                    else (json_files[0].stem if len(json_files) == 1 else project.name)
+                )
+            prepared_names = unique_project_names(source_names)
+
+            staged_projects: list[tuple[Path, Path, str, str, int]] = []
+            for order, (project, names) in enumerate(
+                zip(legacy_projects, prepared_names), start=1
+            ):
+                display_name, directory_name = names
+                temporary = staging / f".project-identity-{uuid4().hex}"
+                project.rename(temporary)
+                staged_projects.append(
+                    (temporary, staging / directory_name, display_name, directory_name, order)
+                )
+            for temporary, destination, _display, _directory, _order in staged_projects:
+                if destination.exists():
+                    raise ProjectCreationError(f"迁移目录名称冲突：{destination}")
+                temporary.rename(destination)
+
+            project_records: list[dict[str, object]] = []
+            for _temporary, project, display_name, directory_name, order in staged_projects:
+                json_files = sorted((project / "原始需求").glob("*.json"))
+                source_json = json_files[0] if len(json_files) == 1 else None
+                try:
+                    existing_config = read_json_object(project / self.PROJECT_CONFIG_NAME)
+                except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+                    existing_config = None
+                if existing_config and valid_uuid(existing_config.get("project_id")):
+                    config = existing_config
+                    project_id = str(config["project_id"])
+                    known_names = [
+                        str(value) for value in config.get("known_directory_names", [])
+                    ]
+                    if directory_name not in known_names:
+                        known_names.append(directory_name)
+                    config.update(
+                        schema_version=1,
+                        order=order,
+                        display_name=display_name,
+                        directory_name=directory_name,
+                        known_directory_names=known_names,
+                    )
+                    config.setdefault("product_base_name", display_name)
+                    config.setdefault("artifacts", [])
+                else:
+                    project_id = str(uuid4())
+                    config = {
+                        "schema_version": 1,
+                        "project_id": project_id,
+                        "order": order,
+                        "display_name": display_name,
+                        "directory_name": directory_name,
+                        "source_json": {
+                            "source_id": str(uuid4()),
+                            "file_name": source_json.name if source_json else "",
+                            "sha256": self.file_sha256(source_json) if source_json else "",
+                        },
+                        "product_base_name": display_name,
+                        "known_directory_names": [directory_name],
+                        "artifacts": [],
+                    }
+                self._migrate_legacy_products(project, config, conflicts)
+                write_json_object(project / self.PROJECT_CONFIG_NAME, config)
+                task = project / "当前任务.md"
+                if task.is_file():
+                    try:
+                        task_text = task.read_text(encoding="utf-8-sig")
+                        task_text = re.sub(r"项目[：:]\s*项目\d+", f"项目显示名：{display_name}", task_text)
+                        task.write_text(task_text, encoding="utf-8")
+                    except (OSError, UnicodeError):
+                        pass
+                project_records.append(
+                    {
+                        "project_id": project_id,
+                        "order": order,
+                        "display_name": display_name,
+                        "directory_name": directory_name,
+                    }
+                )
+
             manifest = self.read_manifest(staging)
-            manifest["schema_version"] = 2
+            manifest["schema_version"] = self.MANIFEST_SCHEMA_VERSION
             manifest["group_id"] = str(manifest.get("group_id") or uuid4())
             manifest["product_directory"] = self.PRODUCT_DIRECTORY
+            manifest["projects"] = project_records
             manifest.pop("delivery_directory", None)
             (staging / self.MANIFEST_NAME).write_text(
                 json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -643,7 +1053,8 @@ class ProjectService:
             report.write_text(
                 "# 项目结构迁移报告\n\n"
                 f"迁移时间：{datetime.now().astimezone().isoformat(timespec='seconds')}\n\n"
-                "目标结构：原始需求 / 客户反馈 / 产品迭代\n\n"
+                "目标结构：原始需求 / 客户反馈 / 产品迭代 / 项目配置.json\n\n"
+                "项目名称已从唯一原始 JSON 文件名生成，项目和产品已登记稳定 ID。\n\n"
                 + ("同名冲突：\n" + "\n".join(f"- {item}" for item in conflicts) if conflicts else "同名冲突：无")
                 + "\n",
                 encoding="utf-8",
@@ -667,6 +1078,115 @@ class ProjectService:
         finally:
             if staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
+
+    def preview_legacy_migration(self, group_root: Path) -> tuple[tuple[str, str], ...]:
+        root = Path(group_root).expanduser().resolve()
+        projects = self._project_paths(root)
+        projects.sort(
+            key=lambda path: (
+                int(self.PROJECT_PATTERN.fullmatch(path.name).group(1))
+                if self.PROJECT_PATTERN.fullmatch(path.name)
+                else 999999,
+                path.name.casefold(),
+            )
+        )
+        source_names = []
+        for project in projects:
+            json_files = sorted((project / "原始需求").glob("*.json"))
+            source_names.append(json_files[0].stem if len(json_files) == 1 else project.name)
+        prepared = unique_project_names(source_names)
+        return tuple(
+            (project.name, display_name)
+            for project, (display_name, _directory_name) in zip(projects, prepared)
+        )
+
+    def _migrate_legacy_products(
+        self, project: Path, config: dict, conflicts: list[str]
+    ) -> None:
+        product_root = project / self.PRODUCT_DIRECTORY
+        artifacts: list[dict[str, object]] = [
+            item for item in config.get("artifacts", []) if isinstance(item, dict)
+        ]
+        config["artifacts"] = artifacts
+        artifacts_by_version = {
+            int(item.get("version_number", -1)): item for item in artifacts
+        }
+        candidates: list[tuple[int, Path]] = []
+        for path in sorted(product_root.glob("*.html")):
+            if path.name == "初始版本.html":
+                candidates.append((0, path))
+                continue
+            legacy = re.fullmatch(r"第([1-9]\d*)轮修改\.html", path.name, re.IGNORECASE)
+            if legacy:
+                candidates.append((int(legacy.group(1)), path))
+                continue
+            base = re.escape(sanitize_project_name(str(config["product_base_name"]), 96))
+            if re.fullmatch(rf"{base}\.html", path.name, re.IGNORECASE):
+                candidates.append((0, path))
+                continue
+            current = re.fullmatch(rf"{base}（([1-9]\d*)）\.html", path.name, re.IGNORECASE)
+            if current:
+                candidates.append((int(current.group(1)), path))
+
+        seen_versions: set[int] = set()
+        for version, original in candidates:
+            if version in seen_versions:
+                conflicts.append(f"{project.name} 存在多个版本 {version} 的 HTML，已保留原名")
+                continue
+            seen_versions.add(version)
+            expected = (
+                f"{sanitize_project_name(str(config['product_base_name']), 96)}.html"
+                if version == 0
+                else f"{sanitize_project_name(str(config['product_base_name']), 96)}（{version}）.html"
+            )
+            destination = product_root / expected
+            path = original
+            aliases: list[str] = []
+            if original.name != expected:
+                if destination.exists():
+                    conflicts.append(f"{original.name} 未改名：目标 {expected} 已存在")
+                else:
+                    aliases.append(original.name)
+                    original.rename(destination)
+                    path = destination
+            artifact = artifacts_by_version.get(version)
+            artifact_id = (
+                str(artifact.get("artifact_id"))
+                if artifact and valid_uuid(artifact.get("artifact_id"))
+                else str(uuid4())
+            )
+            try:
+                write_courseware_meta(
+                    path,
+                    str(config["project_id"]),
+                    artifact_id,
+                    version,
+                    version,
+                )
+            except (OSError, UnicodeError):
+                conflicts.append(f"{path.name} 无法写入稳定 ID meta")
+            if artifact is None:
+                artifact = {
+                    "artifact_id": artifact_id,
+                    "project_id": str(config["project_id"]),
+                    "type": "courseware_html",
+                    "version_number": version,
+                    "feedback_round": version,
+                    "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                    "aliases": [],
+                    "ignored_names": [],
+                }
+                artifacts.append(artifact)
+            existing_aliases = artifact.setdefault("aliases", [])
+            for alias in aliases:
+                if alias not in existing_aliases:
+                    existing_aliases.append(alias)
+            artifact.update(
+                project_id=str(config["project_id"]),
+                expected_name=expected,
+                current_name=path.name,
+                sha256=self.file_sha256(path),
+            )
 
     def _merge_directory(
         self,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .archive_service import ArchiveService
 from .prompt_service import PromptService
 from .project_service import ProjectService
 from .resource_paths import bundled_resource_root
@@ -15,14 +16,23 @@ class TaskService:
             else bundled_resource_root()
         )
         self.templates_root = self.resource_root / "prompt_templates"
+        self.project_service = ProjectService(self.resource_root)
+        self.archive_service = ArchiveService(self.project_service)
 
     def generate_first_build_task(self, project_root: Path, special_requirements: str) -> Path:
         project_path = Path(project_root).resolve()
         if not project_path.is_dir():
             raise FileNotFoundError(f"项目目录不存在：{project_path}")
+        config = self.project_service.read_project_config(project_path)
+        artifact = self.archive_service.allocate_artifact(project_path, 0, 0)
         template = self._read_template("first_build_task.md")
         content = (
-            template.replace("{{PROJECT_NAME}}", project_path.name)
+            template.replace("{{PROJECT_NAME}}", str(config["display_name"]))
+            .replace("{{PROJECT_ID}}", str(config["project_id"]))
+            .replace("{{ARTIFACT_ID}}", str(artifact["artifact_id"]))
+            .replace("{{EXPECTED_OUTPUT}}", f"产品迭代/{artifact['expected_name']}")
+            .replace("{{VERSION_NUMBER}}", "0")
+            .replace("{{FEEDBACK_ROUND_NUMBER}}", "0")
             .replace("{{SPECIAL_REQUIREMENTS}}", special_requirements.strip() or "无")
         )
         content = content.rstrip() + self._binding_block(project_path)
@@ -41,9 +51,18 @@ class TaskService:
         feedback_round = project_path / "客户反馈" / f"第{round_number}轮"
         if round_number <= 0 or not feedback_round.is_dir():
             raise FileNotFoundError(f"客户反馈轮次不存在：第{round_number}轮")
+        config = self.project_service.read_project_config(project_path)
+        artifact = self.archive_service.allocate_artifact(
+            project_path, round_number, round_number
+        )
         template = self._read_template("feedback_task.md")
         content = (
-            template.replace("{{PROJECT_NAME}}", project_path.name)
+            template.replace("{{PROJECT_NAME}}", str(config["display_name"]))
+            .replace("{{PROJECT_ID}}", str(config["project_id"]))
+            .replace("{{ARTIFACT_ID}}", str(artifact["artifact_id"]))
+            .replace("{{EXPECTED_OUTPUT}}", f"产品迭代/{artifact['expected_name']}")
+            .replace("{{VERSION_NUMBER}}", str(round_number))
+            .replace("{{FEEDBACK_ROUND_NUMBER}}", str(round_number))
             .replace("{{FEEDBACK_ROUND}}", f"第{round_number}轮")
             .replace("{{SPECIAL_REQUIREMENTS}}", special_requirements.strip() or "无")
         )

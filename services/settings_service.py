@@ -67,7 +67,10 @@ class SettingsService:
                 last_project = str(relocated.get("last_project", "")).strip()
                 if last_project:
                     selections = self._last_selected_projects()
-                    selections[self._group_key(resolved)] = last_project
+                    selections[self._group_key(resolved)] = {
+                        "group_id": group_id,
+                        "project_id": last_project,
+                    }
                     self._save_selections(selections)
                 stale.remove(relocated)
                 self._save_stale(stale)
@@ -116,11 +119,12 @@ class SettingsService:
             missing.append(path)
             key = self._group_key(path)
             notices.pop(key, None)
+            selection = selections.pop(key, {})
             stale.append(
                 {
                     "path": str(path),
                     "group_id": str(item.get("group_id", "")),
-                    "last_project": selections.pop(key, ""),
+                    "last_project": str(selection.get("project_id", "")),
                 }
             )
             if recent and self._group_key(recent) == key:
@@ -173,15 +177,19 @@ class SettingsService:
         return tuple(Path(item["path"]) for item in self._stale_registrations())
 
     def last_selected_project(self, group_path: Path) -> str | None:
-        value = self._last_selected_projects().get(self._group_key(group_path), "").strip()
+        record = self._last_selected_projects().get(self._group_key(group_path), {})
+        value = str(record.get("project_id", "")).strip()
         return value or None
 
-    def save_last_selected_project(self, group_path: Path, project_name: str) -> None:
-        name = project_name.strip()
-        if not name:
+    def save_last_selected_project(self, group_path: Path, project_id: str) -> None:
+        identity = project_id.strip()
+        if not identity:
             return
         selections = self._last_selected_projects()
-        selections[self._group_key(group_path)] = name
+        selections[self._group_key(group_path)] = {
+            "group_id": self._read_group_id(Path(group_path)),
+            "project_id": identity,
+        }
         self._save_selections(selections)
         self.settings.sync()
 
@@ -246,19 +254,28 @@ class SettingsService:
     def _save_stale(self, stale: list[dict[str, str]]) -> None:
         self.settings.setValue(self.STALE_GROUPS_KEY, json.dumps(stale, ensure_ascii=False))
 
-    def _last_selected_projects(self) -> dict[str, str]:
+    def _last_selected_projects(self) -> dict[str, dict[str, str]]:
         raw = self.settings.value(self.LAST_SELECTED_PROJECTS_KEY, "", type=str).strip()
         try:
             data = json.loads(raw) if raw else {}
         except (TypeError, json.JSONDecodeError):
             return {}
-        return {
-            str(key): str(value)
-            for key, value in data.items()
-            if isinstance(key, str) and isinstance(value, str)
-        } if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        result: dict[str, dict[str, str]] = {}
+        for key, value in data.items():
+            if not isinstance(key, str):
+                continue
+            if isinstance(value, str):
+                result[key] = {"group_id": "", "project_id": value}
+            elif isinstance(value, dict):
+                result[key] = {
+                    "group_id": str(value.get("group_id", "")),
+                    "project_id": str(value.get("project_id", "")),
+                }
+        return result
 
-    def _save_selections(self, selections: dict[str, str]) -> None:
+    def _save_selections(self, selections: dict[str, dict[str, str]]) -> None:
         self.settings.setValue(
             self.LAST_SELECTED_PROJECTS_KEY,
             json.dumps(selections, ensure_ascii=False, sort_keys=True),

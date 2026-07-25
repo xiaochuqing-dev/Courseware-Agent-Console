@@ -65,6 +65,7 @@ class MainWindow(QMainWindow):
             self.project_service, self.archive_service, self.feedback_service
         )
         self._deletion_in_progress = False
+        self._migration_in_progress = False
         self._showing_error_dialog = False
         self._threads: set[QThread] = set()
         self._workers: set[BackgroundWorker] = set()
@@ -117,6 +118,7 @@ class MainWindow(QMainWindow):
         self.home_page.project_selected.connect(self._remember_project_selection)
         self.home_page.group_switch_requested.connect(self._switch_project_group)
         self.home_page.delete_group_requested.connect(self.delete_project_group)
+        self.home_page.migration_requested.connect(self.preview_and_migrate_group)
         self.create_page.cancelled.connect(self.show_home_page)
         self.create_page.project_created.connect(self._project_created)
         self.create_page.open_existing_requested.connect(self._open_existing_group)
@@ -234,7 +236,7 @@ class MainWindow(QMainWindow):
             self._handle_structure_notice(
                 group.root,
                 "legacy-project-structure",
-                f"“{group.name}”使用旧项目结构，已按原样打开，不会备份或迁移。",
+                f"“{group.name}”使用旧命名，已按原样打开；可从顶部提示预览迁移。",
             )
         elif issues:
             self.home_page.remember_structure_issues(issues)
@@ -327,7 +329,9 @@ class MainWindow(QMainWindow):
         if answer != QMessageBox.StandardButton.Yes:
             return
         try:
-            destination = self.archive_service.archive_project(group.root, project.name)
+            destination = self.archive_service.archive_project(
+                group.root, project.project_id or project.name
+            )
         except NoProductVersionError:
             self.show_error("当前项目没有可用产品版本。")
             return
@@ -375,9 +379,47 @@ class MainWindow(QMainWindow):
         if self.load_project_group(path):
             self.show_toast("项目组已创建")
 
-    def _remember_project_selection(self, group_path: Path, project_name: str) -> None:
-        self.settings_service.save_last_selected_project(group_path, project_name)
+    def _remember_project_selection(self, group_path: Path, project_id: str) -> None:
+        self.settings_service.save_last_selected_project(group_path, project_id)
         logger.info("Project selection saved")
+
+    def preview_and_migrate_group(self, group_path: Path) -> None:
+        if self._migration_in_progress:
+            return
+        try:
+            mappings = self.project_service.preview_legacy_migration(group_path)
+        except Exception as exc:
+            self.show_error(f"无法预览迁移：{exc}")
+            return
+        preview = "\n".join(f"{old} → {new}" for old, new in mappings)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("预览项目命名迁移")
+        box.setText("将先在项目组同级创建完整备份，再迁移为稳定 ID 和课题名称。")
+        box.setInformativeText(preview)
+        box.setStyleSheet("QMessageBox QLabel { min-width: 520px; }")
+        migrate_button = box.addButton("开始迁移", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("稍后", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is not migrate_button:
+            return
+        self._migration_in_progress = True
+        self.show_toast("正在备份并迁移项目组…", 3600)
+
+        def operation(progress):
+            return self.project_service.migrate_legacy_group(group_path, progress)
+
+        def succeeded(result) -> None:
+            self.load_project_group(result.group_root)
+            self.show_toast(f"迁移完成，备份：{result.backup_root.name}", 5000)
+
+        def failed(exc: BaseException) -> None:
+            self.show_error(str(exc))
+
+        def finished() -> None:
+            self._migration_in_progress = False
+
+        self._run_background(operation, succeeded, failed, finished)
 
     def _open_existing_group(self, path: Path) -> None:
         self.load_project_group(path)

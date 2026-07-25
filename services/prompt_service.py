@@ -32,9 +32,17 @@ class PromptService:
         latest = self.archive_service.latest_product(project_path)
         if latest is None:
             raise FileNotFoundError("当前项目没有可用产品版本。")
+        try:
+            display_name = str(
+                self.archive_service.project_service.read_project_config(project_path).get(
+                    "display_name", project_path.name
+                )
+            )
+        except Exception:
+            display_name = project_path.name
         return (
             self._read_template("product_acceptance_prompt.md")
-            .replace("{{PROJECT_NAME}}", project_path.name)
+            .replace("{{PROJECT_NAME}}", display_name)
             .replace("{{LATEST_PRODUCT}}", f"{latest.parent.name}/{latest.name}")
             .strip()
         )

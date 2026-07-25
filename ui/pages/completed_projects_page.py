@@ -145,9 +145,10 @@ class CompletedProjectsPage(QWidget):
         self.current_project = None
         self.project_list.clear()
         for project in projects:
-            item = QListWidgetItem(project.name)
+            display_name = self.archive_service.archived_project_name(project)
+            item = QListWidgetItem(display_name)
             item.setData(Qt.ItemDataRole.UserRole, str(project))
-            item.setToolTip(str(project))
+            item.setToolTip(f"{display_name}\n{project}")
             self.project_list.addItem(item)
         if self.project_list.count():
             self.project_list.setCurrentRow(0)
@@ -166,7 +167,9 @@ class CompletedProjectsPage(QWidget):
             self._set_actions_enabled(False)
             return
         self.current_project = Path(current.data(Qt.ItemDataRole.UserRole))
-        self.project_name_label.setText(self.current_project.name)
+        self.project_name_label.setText(
+            self.archive_service.archived_project_name(self.current_project)
+        )
         self.path_label.setText(str(self.current_project))
         latest = self.archive_service.latest_product(self.current_project)
         self.latest_product_label.setText(

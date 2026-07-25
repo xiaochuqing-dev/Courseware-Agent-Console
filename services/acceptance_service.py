@@ -404,7 +404,10 @@ class AcceptanceService:
         )
 
     def _state_directory(self, project_root: Path) -> Path:
-        key = hashlib.sha256(
-            str(Path(project_root).resolve()).casefold().encode("utf-8")
-        ).hexdigest()
+        project = Path(project_root).resolve()
+        try:
+            identity = str(self.project_service.read_project_config(project)["project_id"])
+        except Exception:
+            identity = str(project).casefold()
+        key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         return self.state_root / key

@@ -32,6 +32,7 @@ from services import (
     ArchiveService,
     FeedbackService,
     PendingFeedback,
+    ProductNotice,
     ProjectService,
     PromptService,
     TaskService,
@@ -60,6 +61,7 @@ class HomePage(QWidget):
     project_selected = Signal(object, str)
     group_switch_requested = Signal(object)
     delete_group_requested = Signal(object)
+    migration_requested = Signal(object)
 
     def __init__(
         self,
@@ -90,6 +92,8 @@ class HomePage(QWidget):
         self._prompt_dialog: PromptDialog | None = None
         self._acceptance_dialog: AcceptanceDialog | None = None
         self._structure_notice_key: str | None = None
+        self._active_notice: tuple[str, object] | None = None
+        self._migration_deferred_group: Path | None = None
         self._build_ui()
         self.set_empty_state()
 
@@ -209,6 +213,26 @@ class HomePage(QWidget):
         header_layout.addLayout(path_row)
         main_layout.addWidget(header_card)
 
+        self.notice_banner = QWidget()
+        self.notice_banner.setObjectName("noticeBanner")
+        notice_layout = QHBoxLayout(self.notice_banner)
+        notice_layout.setContentsMargins(12, 8, 10, 8)
+        notice_layout.setSpacing(8)
+        self.notice_label = QLabel()
+        self.notice_label.setWordWrap(True)
+        notice_layout.addWidget(self.notice_label, 1)
+        self.notice_primary_button = QPushButton()
+        self.notice_primary_button.clicked.connect(self._resolve_notice_primary)
+        notice_layout.addWidget(self.notice_primary_button)
+        self.notice_secondary_button = QPushButton()
+        self.notice_secondary_button.clicked.connect(self._resolve_notice_secondary)
+        notice_layout.addWidget(self.notice_secondary_button)
+        self.notice_ignore_button = QPushButton("忽略")
+        self.notice_ignore_button.clicked.connect(self._ignore_notice)
+        notice_layout.addWidget(self.notice_ignore_button)
+        self.notice_banner.hide()
+        main_layout.addWidget(self.notice_banner)
+
         self.content_stack = QStackedWidget()
         empty_page = QWidget()
         empty_page.setObjectName("page")
@@ -283,12 +307,15 @@ class HomePage(QWidget):
         task_title = QLabel("当前任务")
         task_title.setObjectName("sectionTitle")
         title_row.addWidget(task_title)
-        self.current_project_label = QLabel()
+        self.current_project_label = ElidedLabel()
         self.current_project_label.setObjectName("taskProjectName")
-        title_row.addWidget(self.current_project_label)
-        title_row.addStretch()
+        self.current_project_label.setMinimumWidth(120)
+        self.current_project_label.setMaximumWidth(360)
+        title_row.addWidget(self.current_project_label, 1)
         self.latest_product_label = ElidedLabel("最新产品：无")
         self.latest_product_label.setObjectName("mutedText")
+        self.latest_product_label.setFixedWidth(300)
+        self.latest_product_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         title_row.addWidget(self.latest_product_label)
         task_layout.addLayout(title_row)
 
@@ -500,6 +527,8 @@ class HomePage(QWidget):
     def set_group(self, group: ProjectGroup, preferred_project: str | None = None) -> None:
         self.group = group
         self._structure_notice_key = None
+        self._active_notice = None
+        self.notice_banner.hide()
         self.current_project = None
         self.pending_feedback.clear()
         self.saved_feedback.clear()
@@ -521,10 +550,18 @@ class HomePage(QWidget):
         self.project_list.clear()
         selected_row = 0
         for row, project in enumerate(group.projects):
-            item = QListWidgetItem(project.name)
-            item.setData(Qt.ItemDataRole.UserRole, str(project.path))
+            item = QListWidgetItem(project.display_name)
+            item.setToolTip(project.display_name)
+            item.setData(Qt.ItemDataRole.UserRole, project.project_id or str(project.path))
             self.project_list.addItem(item)
-            if project.name == preferred_project:
+            if preferred_project in {project.project_id, project.name}:
+                selected_row = row
+            elif (
+                preferred_project
+                and preferred_project.startswith("项目")
+                and preferred_project[2:].isdigit()
+                and project.order == int(preferred_project[2:])
+            ):
                 selected_row = row
         if self.project_list.count():
             self.content_stack.setCurrentIndex(1)
@@ -537,6 +574,11 @@ class HomePage(QWidget):
             self.empty_select_button.show()
             self.empty_completed_button.show()
             self.content_stack.setCurrentIndex(0)
+        if (
+            group.migration_required
+            and self._migration_deferred_group != group.root.resolve()
+        ):
+            self._show_migration_notice()
 
     def set_empty_state(self, message: str | None = None) -> None:
         self.group = None
@@ -548,6 +590,8 @@ class HomePage(QWidget):
         self._refresh_pending_list()
         self._refresh_saved_list()
         self.project_list.clear()
+        self._active_notice = None
+        self.notice_banner.hide()
         self._populate_group_selector()
         self.root_path_label.setText("尚未选择项目组")
         self.root_path_label.setToolTip("")
@@ -572,7 +616,7 @@ class HomePage(QWidget):
         self.empty_completed_button.hide()
         self.content_stack.setCurrentIndex(0)
         self.task_status_text.setText("尚未生成当前任务")
-        self.current_project_label.clear()
+        self.current_project_label.setText("")
         self.tools_binding_label.setText("工具绑定：未选择项目组")
         self.acceptance_status_label.setText("验收状态：未验收")
         self._update_task_mode_state()
@@ -608,7 +652,11 @@ class HomePage(QWidget):
                 "项目组文件夹已被改名、移动或删除，已停止刷新。",
             )
             return
-        preferred = self.current_project.name if self.current_project else None
+        preferred = (
+            self.current_project.project_id or self.current_project.name
+            if self.current_project
+            else None
+        )
         pending = list(self.pending_feedback)
         try:
             group = self.project_service.load_project_group(
@@ -630,7 +678,10 @@ class HomePage(QWidget):
             )
         else:
             self._clear_structure_notice()
-        if preferred and self.current_project and self.current_project.name == preferred:
+        if preferred and self.current_project and preferred in {
+            self.current_project.project_id,
+            self.current_project.name,
+        }:
             self.pending_feedback = pending
             self._refresh_pending_list()
 
@@ -638,10 +689,13 @@ class HomePage(QWidget):
         if not self.current_project:
             return
         if not self.current_project.path.is_dir():
-            self._notify_structure_once(
-                f"missing-project:{self.current_project.path}",
-                "当前项目文件夹已被改名、移动或删除。",
-            )
+            if self.current_project.project_id:
+                self.refresh_group()
+            else:
+                self._notify_structure_once(
+                    f"missing-project:{self.current_project.path}",
+                    "当前项目文件夹已被改名、移动或删除。",
+                )
             return
         if self.group:
             issues = self.project_service.inspect_group_structure(self.group.root)
@@ -678,6 +732,162 @@ class HomePage(QWidget):
         if self.group:
             self.structure_notice_requested.emit(self.group.root, "", "")
 
+    def _show_migration_notice(self) -> None:
+        if not self.group:
+            return
+        self._active_notice = ("migration", self.group.root)
+        self.notice_label.setText("检测到旧项目命名，可升级为课题名称显示。")
+        self.notice_primary_button.setText("预览迁移")
+        self.notice_secondary_button.setText("稍后")
+        self.notice_secondary_button.show()
+        self.notice_ignore_button.hide()
+        self.notice_banner.show()
+
+    def _refresh_identity_notice(self) -> None:
+        if not self.current_project or not self.current_project.project_id:
+            return
+        try:
+            config = self.project_service.read_project_config(self.current_project.path)
+        except Exception:
+            return
+        directory_notice = config.get("directory_rename_notice")
+        if isinstance(directory_notice, dict):
+            old_name = str(directory_notice.get("old_name", ""))
+            new_name = str(directory_notice.get("new_name", self.current_project.path.name))
+            self._active_notice = ("directory", self.current_project)
+            self.notice_label.setText(
+                f"检测到项目文件夹已更名：{old_name} → {new_name}"
+            )
+            self.notice_primary_button.setText("采用新目录名")
+            self.notice_secondary_button.setText("保持原显示名")
+            self.notice_secondary_button.show()
+            self.notice_ignore_button.hide()
+            self.notice_banner.show()
+            return
+        product_base_notice = config.get("product_base_name_notice")
+        if isinstance(product_base_notice, dict):
+            self._active_notice = ("product_base", self.current_project)
+            self.notice_label.setText(
+                "项目显示名已修改，后续新版本是否使用新名称？"
+            )
+            self.notice_primary_button.setText("以后使用新名称")
+            self.notice_secondary_button.setText("仅修改界面显示")
+            self.notice_secondary_button.show()
+            self.notice_ignore_button.hide()
+            self.notice_banner.show()
+            return
+        notices = self.archive_service.reconcile_product_files(self.current_project.path)
+        if not notices:
+            if self._active_notice and self._active_notice[0] != "migration":
+                self._active_notice = None
+                self.notice_banner.hide()
+            return
+        notice = notices[0]
+        self._active_notice = ("product", notice)
+        self.notice_label.setText(notice.message)
+        if notice.kind == "renamed":
+            self.notice_primary_button.setText("以后按新名称识别")
+            self.notice_secondary_button.setText("恢复规范名称")
+            self.notice_secondary_button.show()
+            self.notice_ignore_button.show()
+        elif notice.kind == "unregistered":
+            self.notice_primary_button.setText("绑定为当前项目产品")
+            self.notice_secondary_button.hide()
+            self.notice_ignore_button.show()
+        else:
+            self.notice_primary_button.setText("知道了")
+            self.notice_secondary_button.hide()
+            self.notice_ignore_button.hide()
+        self.notice_banner.show()
+
+    def _resolve_notice_primary(self) -> None:
+        if not self._active_notice:
+            return
+        kind, payload = self._active_notice
+        try:
+            if kind == "migration":
+                self.migration_requested.emit(payload)
+                return
+            if kind == "directory" and self.group:
+                project = payload
+                self.project_service.resolve_directory_rename(
+                    self.group.root, project.project_id, True
+                )
+                self.refresh_group()
+                return
+            if kind == "product_base":
+                project = payload
+                self.project_service.resolve_product_base_name(project.path, True)
+                self._active_notice = None
+                self.notice_banner.hide()
+                self._refresh_project_state()
+                return
+            if kind == "product" and self.current_project:
+                notice = payload
+                if notice.kind == "renamed":
+                    self.archive_service.accept_product_rename(
+                        self.current_project.path,
+                        notice.artifact_id,
+                        notice.new_name,
+                    )
+                elif notice.kind == "unregistered":
+                    self.archive_service.bind_product(
+                        self.current_project.path, notice.path
+                    )
+                self._active_notice = None
+                self.notice_banner.hide()
+                self._refresh_project_state()
+        except Exception as exc:
+            self.error_requested.emit(f"无法处理重命名提示：{exc}")
+
+    def _resolve_notice_secondary(self) -> None:
+        if not self._active_notice:
+            return
+        kind, payload = self._active_notice
+        try:
+            if kind == "migration":
+                self._migration_deferred_group = Path(payload).resolve()
+                self._active_notice = None
+                self.notice_banner.hide()
+            elif kind == "directory" and self.group:
+                project = payload
+                self.project_service.resolve_directory_rename(
+                    self.group.root, project.project_id, False
+                )
+                self.refresh_group()
+            elif kind == "product_base":
+                project = payload
+                self.project_service.resolve_product_base_name(project.path, False)
+                self._active_notice = None
+                self.notice_banner.hide()
+                self._refresh_project_state()
+            elif kind == "product" and self.current_project:
+                notice = payload
+                if notice.kind == "renamed":
+                    self.archive_service.restore_product_name(
+                        self.current_project.path, notice.artifact_id
+                    )
+                self._active_notice = None
+                self.notice_banner.hide()
+                self._refresh_project_state()
+        except Exception as exc:
+            self.error_requested.emit(f"无法处理重命名提示：{exc}")
+
+    def _ignore_notice(self) -> None:
+        if not self._active_notice:
+            return
+        kind, payload = self._active_notice
+        try:
+            if kind == "product" and self.current_project:
+                self.archive_service.ignore_product_notice(
+                    self.current_project.path, payload
+                )
+        except Exception as exc:
+            self.error_requested.emit(f"无法忽略提示：{exc}")
+            return
+        self._active_notice = None
+        self.notice_banner.hide()
+
     def _group_selector_activated(self, index: int) -> None:
         data = self.group_selector.itemData(index)
         if data is None:
@@ -703,9 +913,14 @@ class HomePage(QWidget):
             self.task_status_text.setText("尚未生成当前任务")
             self._update_task_mode_state()
             return
-        path = Path(current.data(Qt.ItemDataRole.UserRole))
+        identity = str(current.data(Qt.ItemDataRole.UserRole))
         next_project = next(
-            (project for project in self.group.projects if project.path == path), None
+            (
+                project
+                for project in self.group.projects
+                if identity in {project.project_id, str(project.path)}
+            ),
+            None,
         )
         if not next_project:
             return
@@ -713,14 +928,17 @@ class HomePage(QWidget):
             self.pending_feedback.clear()
             self._refresh_pending_list()
         self.current_project = next_project
-        self.current_project_label.setText(next_project.name)
+        self.current_project_label.setText(next_project.display_name)
+        self.current_project_label.setToolTip(next_project.display_name)
         self.requirements_input.clear()
         self.archive_button.setEnabled(True)
         self.open_project_button.setEnabled(True)
         self.acceptance_button.setEnabled(True)
         self.record_button.setEnabled(True)
         self._refresh_project_state()
-        self.project_selected.emit(self.group.root, next_project.name)
+        self.project_selected.emit(
+            self.group.root, next_project.project_id or next_project.name
+        )
 
     def _refresh_project_state(self) -> None:
         if not self.current_project:
@@ -765,6 +983,7 @@ class HomePage(QWidget):
         self.latest_product_label.setText(
             f"最新产品：{latest_product.name}" if latest_product else "最新产品：无"
         )
+        self._refresh_identity_notice()
         rounds = self.feedback_service.scan_rounds(self.current_project.path)
         self.feedback_round_combo.blockSignals(True)
         self.feedback_round_combo.clear()

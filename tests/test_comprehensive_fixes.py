@@ -59,16 +59,20 @@ def wait_until(app: QApplication, predicate, timeout_ms: int = 8000) -> None:
     assert predicate()
 
 
-def test_schema_v2_has_stable_group_id_and_single_product_directory(
+def test_schema_v3_has_stable_ids_and_single_product_directory(
     tmp_path: Path, resource_root: Path
 ) -> None:
     service, group = create_group(tmp_path, resource_root)
     manifest = service.read_manifest(group.root)
-    assert manifest["schema_version"] == 2
+    assert manifest["schema_version"] == 3
     assert manifest["group_id"]
     assert manifest["product_directory"] == "产品迭代"
     assert "delivery_directory" not in manifest
+    assert manifest["projects"][0]["project_id"] == group.projects[0].project_id
     project = group.projects[0].path
+    project_config = service.read_project_config(project)
+    assert project_config["display_name"] == "测试项目组"
+    assert project_config["project_id"] == group.projects[0].project_id
     assert {path.name for path in project.iterdir() if path.is_dir()} == {
         "原始需求",
         "客户反馈",
@@ -103,15 +107,17 @@ def test_legacy_migration_backs_up_merges_without_overwrite_and_is_repeat_safe(
     result = service.migrate_legacy_group(group.root)
 
     assert result.backup_root.is_dir()
-    migrated = group.root / "项目1"
-    assert (migrated / "产品迭代" / "初始版本.html").read_text(encoding="utf-8") == "working"
+    migrated_group = service.load_project_group(group.root)
+    migrated = migrated_group.projects[0].path
+    assert (migrated / "产品迭代" / "旧结构.html").is_file()
+    assert "working" in (migrated / "产品迭代" / "旧结构.html").read_text(encoding="utf-8")
     conflicts = list((migrated / "产品迭代").glob("初始版本-来自最终交付*.html"))
     assert len(conflicts) == 1
     assert conflicts[0].read_text(encoding="utf-8") == "delivery"
     assert not any((migrated / name).exists() for name in service.LEGACY_DIRECTORIES)
     assert "旧验收结论" in (migrated / "项目记录.md").read_text(encoding="utf-8")
-    assert service.read_manifest(group.root)["schema_version"] == 2
-    with pytest.raises(RuntimeError, match="已经是 schema v2"):
+    assert service.read_manifest(group.root)["schema_version"] == 3
+    with pytest.raises(RuntimeError, match="已经是 schema v3"):
         service.migrate_legacy_group(group.root)
 
 
@@ -122,20 +128,21 @@ def test_migration_failure_keeps_original_and_named_backup(
     manifest = service.read_manifest(group.root)
     manifest["schema_version"] = 1
     (group.root / service.MANIFEST_NAME).write_text(json.dumps(manifest), encoding="utf-8")
-    sentinel = group.root / "项目1" / "原始需求" / "sentinel.txt"
+    original_project = group.projects[0].path
+    sentinel = original_project / "原始需求" / "sentinel.txt"
     sentinel.write_text("keep", encoding="utf-8")
 
     def fail_merge(*_args, **_kwargs):
         raise OSError("simulated migration failure")
 
     monkeypatch.setattr(service, "_merge_directory", fail_merge)
-    (group.root / "项目1" / "工作文件").mkdir()
+    (original_project / "工作文件").mkdir()
     with pytest.raises(ProjectCreationError, match="迁移失败"):
         service.migrate_legacy_group(group.root)
     assert sentinel.read_text(encoding="utf-8") == "keep"
     backups = list(tmp_path.glob("迁移失败-迁移前备份-*"))
     assert len(backups) == 1
-    assert (backups[0] / "项目1" / "原始需求" / "sentinel.txt").is_file()
+    assert (backups[0] / original_project.name / "原始需求" / "sentinel.txt").is_file()
 
 
 def test_multiple_renamed_project_directories_require_explicit_mapping(
@@ -424,7 +431,8 @@ def test_legacy_group_opens_without_modal_or_backup(
 
     assert window.home_page.group is not None
     assert window.home_page.group.root == legacy.root
-    assert any("不会备份或迁移" in text for text, _duration in notices)
+    assert any("顶部提示预览迁移" in text for text, _duration in notices)
+    assert not window.home_page.notice_banner.isHidden()
     assert all(duration >= 3000 for text, duration in notices if "旧项目结构" in text)
     assert list(tmp_path.glob("旧项目直接打开-迁移前备份-*")) == []
     window.close()
