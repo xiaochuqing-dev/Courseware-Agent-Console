@@ -4,7 +4,7 @@
 
 - 基线分支：最新 `main`
 - Base commit：`ee50581b7291d00c626fb64034cbadd438989268`
-- 最终功能 commit：`6bd5370c1046188d2e055b22e586b0950238111b`
+- 最终功能 commit：`f4fc22cec4dc3e15ff7a7d269915638ee791c4e8`
 
 ## 问题与目标
 
