@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import pytest
 import send2trash
-from PySide6.QtCore import QEvent, QSettings
+from PySide6.QtCore import QEvent, QPoint, QSettings
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -27,6 +27,7 @@ from services.process_utils import hidden_process_options
 from tests.helpers import tool_binding
 from ui.main_window import MainWindow
 from ui.pages import CreateProjectPage
+from ui.widgets import Toast
 
 
 @pytest.fixture
@@ -258,6 +259,23 @@ def test_missing_registry_cleanup_and_group_id_relocation(
     assert settings.last_selected_project(moved) == "项目1"
 
 
+def test_structure_notice_fingerprint_persists_and_clears(tmp_path: Path) -> None:
+    ini_path = tmp_path / "structure-notices.ini"
+    group_path = tmp_path / "项目组"
+    settings = SettingsService(
+        QSettings(str(ini_path), QSettings.Format.IniFormat)
+    )
+
+    settings.save_structure_notice_fingerprint(group_path, "folders:missing")
+    reopened = SettingsService(
+        QSettings(str(ini_path), QSettings.Format.IniFormat)
+    )
+    assert reopened.structure_notice_fingerprint(group_path) == "folders:missing"
+
+    reopened.save_structure_notice_fingerprint(group_path, "")
+    assert reopened.structure_notice_fingerprint(group_path) == ""
+
+
 def test_create_page_starts_only_one_worker_for_ten_clicks(
     app: QApplication,
     tmp_path: Path,
@@ -373,7 +391,183 @@ def test_missing_current_path_does_not_open_refresh_error_loop(
     window.close()
 
 
-def test_delete_fallback_never_opens_legacy_backup_prompt(
+def test_legacy_group_opens_without_modal_or_backup(
+    app: QApplication,
+    tmp_path: Path,
+    resource_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, legacy = create_group(tmp_path, resource_root, "旧项目直接打开")
+    manifest = service.read_manifest(legacy.root)
+    manifest["schema_version"] = 1
+    manifest["product_directory"] = "工作文件"
+    manifest["delivery_directory"] = "最终交付"
+    (legacy.root / service.MANIFEST_NAME).write_text(
+        json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+    )
+    ini_path = tmp_path / "legacy-open.ini"
+    settings = SettingsService(QSettings(str(ini_path), QSettings.Format.IniFormat))
+    settings.save_recent_group_path(legacy.root)
+    notices = []
+
+    def fail_modal(*_args, **_kwargs):
+        pytest.fail("项目结构异常不应打开阻塞弹窗")
+
+    monkeypatch.setattr(QMessageBox, "question", fail_modal)
+    monkeypatch.setattr(QMessageBox, "warning", fail_modal)
+    monkeypatch.setattr(
+        Toast,
+        "show_message",
+        lambda _self, text, duration_ms=1800: notices.append((text, duration_ms)),
+    )
+    window = MainWindow(service, TaskService(resource_root), settings)
+
+    assert window.home_page.group is not None
+    assert window.home_page.group.root == legacy.root
+    assert any("不会备份或迁移" in text for text, _duration in notices)
+    assert all(duration >= 3000 for text, duration in notices if "旧项目结构" in text)
+    assert list(tmp_path.glob("旧项目直接打开-迁移前备份-*")) == []
+    window.close()
+
+    first_notice_count = sum("旧项目结构" in text for text, _duration in notices)
+    reopened_settings = SettingsService(
+        QSettings(str(ini_path), QSettings.Format.IniFormat)
+    )
+    reopened_window = MainWindow(
+        service, TaskService(resource_root), reopened_settings
+    )
+    assert reopened_window.home_page.group is not None
+    assert reopened_window.home_page.group.root == legacy.root
+    assert sum("旧项目结构" in text for text, _duration in notices) == first_notice_count
+    reopened_window.close()
+
+
+def test_renamed_project_folder_only_shows_temporary_notice(
+    app: QApplication,
+    tmp_path: Path,
+    resource_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, group = create_group(tmp_path, resource_root, "目录改名提示")
+    project = group.projects[0].path
+    (project / "客户反馈").rename(project / "客户意见")
+    settings = SettingsService(
+        QSettings(str(tmp_path / "renamed.ini"), QSettings.Format.IniFormat)
+    )
+    window = MainWindow(service, TaskService(resource_root), settings)
+    notices = []
+
+    def fail_modal(*_args, **_kwargs):
+        pytest.fail("文件夹改名不应打开阻塞弹窗")
+
+    monkeypatch.setattr(QMessageBox, "question", fail_modal)
+    monkeypatch.setattr(QMessageBox, "warning", fail_modal)
+    monkeypatch.setattr(
+        window,
+        "show_toast",
+        lambda text, duration_ms=1800: notices.append((text, duration_ms)),
+    )
+
+    assert window.load_project_group(group.root)
+    assert window.home_page.group is not None
+    assert any("被改名或删除" in text for text, _duration in notices)
+    assert all(duration >= 3000 for _text, duration in notices)
+
+    initial_notice_count = len(notices)
+    original = project / "原始需求"
+    renamed_original = project / "需求资料"
+    original.rename(renamed_original)
+    window.home_page.refresh_current_project()
+    window.home_page.refresh_current_project()
+
+    assert len(notices) == initial_notice_count + 1
+
+    (project / "客户意见").rename(project / "客户反馈")
+    renamed_original.rename(original)
+    window.home_page.refresh_current_project()
+    assert settings.structure_notice_fingerprint(group.root) == ""
+
+    original.rename(renamed_original)
+    window.home_page.refresh_current_project()
+    assert len(notices) == initial_notice_count + 2
+    window.home_page.refresh_current_project()
+    assert len(notices) == initial_notice_count + 2
+    window.close()
+
+
+def test_invalid_registered_group_is_skipped_without_modal(
+    app: QApplication,
+    tmp_path: Path,
+    resource_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, group = create_group(tmp_path, resource_root, "配置缺失")
+    ini_path = tmp_path / "invalid.ini"
+    settings = SettingsService(QSettings(str(ini_path), QSettings.Format.IniFormat))
+    settings.save_recent_group_path(group.root)
+    (group.root / service.MANIFEST_NAME).unlink()
+    notices = []
+
+    def fail_modal(*_args, **_kwargs):
+        pytest.fail("损坏项目组不应打开阻塞弹窗")
+
+    monkeypatch.setattr(QMessageBox, "question", fail_modal)
+    monkeypatch.setattr(QMessageBox, "warning", fail_modal)
+    monkeypatch.setattr(
+        Toast,
+        "show_message",
+        lambda _self, text, duration_ms=1800: notices.append((text, duration_ms)),
+    )
+    window = MainWindow(service, TaskService(resource_root), settings)
+
+    assert window.home_page.group is None
+    assert any("控制台可以继续使用" in text for text, _duration in notices)
+    window.close()
+
+    first_notice_count = len(notices)
+    reopened_settings = SettingsService(
+        QSettings(str(ini_path), QSettings.Format.IniFormat)
+    )
+    reopened_window = MainWindow(
+        service, TaskService(resource_root), reopened_settings
+    )
+    assert reopened_window.home_page.group is None
+    assert len(notices) == first_notice_count
+    reopened_window.close()
+
+
+def test_toast_is_anchored_to_feedback_card_and_repositions(
+    app: QApplication,
+    tmp_path: Path,
+    resource_root: Path,
+) -> None:
+    service, group = create_group(tmp_path, resource_root, "提示位置")
+    settings = SettingsService(
+        QSettings(str(tmp_path / "toast.ini"), QSettings.Format.IniFormat)
+    )
+    window = MainWindow(service, TaskService(resource_root), settings)
+    window.resize(1400, 900)
+    window.show()
+    assert window.load_project_group(group.root)
+    window.show_toast("项目文件夹被改名或删除，相关功能暂不可用。", 5000)
+    QTest.qWait(80)
+
+    parent = window.toast.parentWidget()
+    anchor = window.home_page.feedback_card
+    anchor_top_left = anchor.mapTo(parent, QPoint(0, 0))
+    assert abs(window.toast.geometry().center().x() - (anchor_top_left.x() + anchor.width() // 2)) <= 1
+    assert window.toast.x() >= anchor_top_left.x() + 24
+    assert window.toast.y() == anchor_top_left.y() + 8
+
+    window.resize(1180, 760)
+    QTest.qWait(80)
+    anchor_top_left = anchor.mapTo(parent, QPoint(0, 0))
+    assert abs(window.toast.geometry().center().x() - (anchor_top_left.x() + anchor.width() // 2)) <= 1
+    assert window.toast.x() >= anchor_top_left.x() + 24
+    window.close()
+
+
+def test_delete_fallback_opens_legacy_group_without_backup_prompt(
     app: QApplication,
     tmp_path: Path,
     resource_root: Path,
@@ -394,16 +588,19 @@ def test_delete_fallback_never_opens_legacy_backup_prompt(
     window = MainWindow(service, TaskService(resource_root), settings)
     assert window.load_project_group(current.root)
     settings.register_project_group(legacy.root)
-    prompts = []
-    monkeypatch.setattr(
-        window, "_offer_legacy_migration", lambda path: prompts.append(path)
-    )
+
+    def fail_modal(*_args, **_kwargs):
+        pytest.fail("删除后切换旧项目组不应打开阻塞弹窗")
+
+    monkeypatch.setattr(QMessageBox, "question", fail_modal)
+    monkeypatch.setattr(QMessageBox, "warning", fail_modal)
 
     window._complete_group_removal(current.root, 0, True, False)
 
-    assert prompts == []
-    assert window.home_page.group is None
+    assert window.home_page.group is not None
+    assert window.home_page.group.root == legacy.root
     assert legacy.root in settings.registered_group_paths()
+    assert list(tmp_path.glob("待迁移组-迁移前备份-*")) == []
     window.close()
 
 

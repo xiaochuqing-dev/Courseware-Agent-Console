@@ -12,6 +12,7 @@ class SettingsService:
     REGISTERED_GROUPS_KEY = "projects/registered_group_paths"
     STALE_GROUPS_KEY = "projects/stale_group_registrations"
     LAST_SELECTED_PROJECTS_KEY = "projects/last_selected_by_group"
+    STRUCTURE_NOTICES_KEY = "projects/structure_notice_fingerprints"
 
     def __init__(self, settings: QSettings | None = None) -> None:
         self.settings = settings or QSettings("CoursewareTools", "CoursewareAgentConsole")
@@ -86,6 +87,9 @@ class SettingsService:
         selections = self._last_selected_projects()
         selections.pop(key, None)
         self._save_selections(selections)
+        notices = self._structure_notices()
+        notices.pop(key, None)
+        self._save_structure_notices(notices)
         recent = self.recent_group_path()
         if recent and self._group_key(recent) == key:
             self.settings.remove(self.RECENT_GROUP_KEY)
@@ -96,6 +100,7 @@ class SettingsService:
         active: list[dict[str, str]] = []
         stale = self._stale_registrations()
         selections = self._last_selected_projects()
+        notices = self._structure_notices()
         recent = self.recent_group_path()
         registrations = self._registrations()
         if recent and all(
@@ -110,6 +115,7 @@ class SettingsService:
                 continue
             missing.append(path)
             key = self._group_key(path)
+            notices.pop(key, None)
             stale.append(
                 {
                     "path": str(path),
@@ -126,6 +132,7 @@ class SettingsService:
             self._save_registrations(active)
             self._save_stale(list(unique_stale.values()))
             self._save_selections(selections)
+            self._save_structure_notices(notices)
             self.settings.sync()
         return tuple(missing)
 
@@ -150,6 +157,11 @@ class SettingsService:
             raise ValueError("所选目录的 group_id 与原项目组不一致。")
         stale.remove(record)
         self._save_stale(stale)
+        notices = self._structure_notices()
+        previous_notice = notices.pop(old_key, "")
+        if previous_notice:
+            notices[self._group_key(new)] = previous_notice
+        self._save_structure_notices(notices)
         self.register_project_group(new, sync=False)
         last_project = str(record.get("last_project", "")).strip()
         if last_project:
@@ -171,6 +183,22 @@ class SettingsService:
         selections = self._last_selected_projects()
         selections[self._group_key(group_path)] = name
         self._save_selections(selections)
+        self.settings.sync()
+
+    def structure_notice_fingerprint(self, group_path: Path) -> str:
+        return self._structure_notices().get(self._group_key(group_path), "")
+
+    def save_structure_notice_fingerprint(
+        self, group_path: Path, fingerprint: str
+    ) -> None:
+        notices = self._structure_notices()
+        key = self._group_key(group_path)
+        value = fingerprint.strip()
+        if value:
+            notices[key] = value
+        else:
+            notices.pop(key, None)
+        self._save_structure_notices(notices)
         self.settings.sync()
 
     def _registrations(self) -> list[dict[str, str]]:
@@ -234,6 +262,24 @@ class SettingsService:
         self.settings.setValue(
             self.LAST_SELECTED_PROJECTS_KEY,
             json.dumps(selections, ensure_ascii=False, sort_keys=True),
+        )
+
+    def _structure_notices(self) -> dict[str, str]:
+        raw = self.settings.value(self.STRUCTURE_NOTICES_KEY, "", type=str).strip()
+        try:
+            data = json.loads(raw) if raw else {}
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return {
+            str(key): str(value)
+            for key, value in data.items()
+            if isinstance(key, str) and isinstance(value, str)
+        } if isinstance(data, dict) else {}
+
+    def _save_structure_notices(self, notices: dict[str, str]) -> None:
+        self.settings.setValue(
+            self.STRUCTURE_NOTICES_KEY,
+            json.dumps(notices, ensure_ascii=False, sort_keys=True),
         )
 
     @staticmethod

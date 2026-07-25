@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMainWindow,
     QMessageBox,
-    QProgressDialog,
     QStackedWidget,
     QVBoxLayout,
 )
@@ -66,7 +65,6 @@ class MainWindow(QMainWindow):
             self.project_service, self.archive_service, self.feedback_service
         )
         self._deletion_in_progress = False
-        self._migration_in_progress = False
         self._showing_error_dialog = False
         self._threads: set[QThread] = set()
         self._workers: set[BackgroundWorker] = set()
@@ -112,6 +110,9 @@ class MainWindow(QMainWindow):
             self.show_workflow_optimization
         )
         self.home_page.toast_requested.connect(self.show_toast)
+        self.home_page.structure_notice_requested.connect(
+            self._handle_structure_notice
+        )
         self.home_page.error_requested.connect(self.show_error)
         self.home_page.project_selected.connect(self._remember_project_selection)
         self.home_page.group_switch_requested.connect(self._switch_project_group)
@@ -125,7 +126,7 @@ class MainWindow(QMainWindow):
         self.workflow_page.error_requested.connect(self.show_error)
         self.workflow_page.toast_requested.connect(self.show_toast)
 
-        self.toast = Toast(background)
+        self.toast = Toast(background, self.home_page.feedback_card)
         self._restore_recent_group()
 
     def show_home_page(self) -> None:
@@ -169,7 +170,7 @@ class MainWindow(QMainWindow):
         self,
         path: Path,
         persist: bool = True,
-        offer_recovery: bool = True,
+        notify_failure: bool = True,
     ) -> bool:
         target = Path(path).expanduser().resolve()
         if (
@@ -181,25 +182,39 @@ class MainWindow(QMainWindow):
                 self.settings_service.registered_group_paths()
             )
             return False
+        legacy_structure = False
         try:
             group = self.project_service.load_project_group(target)
         except MigrationRequiredError:
-            if offer_recovery:
-                self._offer_legacy_migration(target)
-            else:
-                logger.info(
-                    "Skipped automatic legacy migration prompt; root=%s", target
+            try:
+                group = self.project_service.load_project_group(
+                    target, allow_legacy=True
                 )
-            return False
-        except InvalidProjectGroupError as exc:
-            if offer_recovery:
-                self._show_corrupt_group_options(target, str(exc))
-            else:
+            except InvalidProjectGroupError as exc:
+                self._handle_structure_notice(
+                    target,
+                    f"unreadable:{type(exc).__name__}:{exc}",
+                    f"项目组“{target.name}”结构不完整，已跳过，控制台可以继续使用。",
+                )
                 logger.warning(
-                    "Skipped automatic damaged-group prompt; root=%s; error=%s",
+                    "Legacy project group could not be loaded; root=%s; error=%s",
                     target,
                     exc,
                 )
+                return False
+            legacy_structure = True
+            logger.info("Legacy project group opened without migration; root=%s", target)
+        except InvalidProjectGroupError as exc:
+            self._handle_structure_notice(
+                target,
+                f"unreadable:{type(exc).__name__}:{exc}",
+                f"项目组“{target.name}”结构不完整，已跳过，控制台可以继续使用。",
+            )
+            logger.warning(
+                "Damaged project group skipped; root=%s; error=%s",
+                target,
+                exc,
+            )
             return False
         if persist:
             self.settings_service.save_recent_group_path(group.root)
@@ -212,11 +227,32 @@ class MainWindow(QMainWindow):
         self.home_page.set_group(group, preferred_project)
         self.completed_page.set_context(group.root)
         self.workflow_page.set_context(group.root)
-        self.show_home_page()
         logger.info("Project group loaded; project_count=%d", len(group.projects))
         issues = self.project_service.inspect_group_structure(group.root)
-        if issues:
-            self._offer_project_structure_repair(issues)
+        if legacy_structure:
+            self.home_page.remember_structure_issues(issues)
+            self._handle_structure_notice(
+                group.root,
+                "legacy-project-structure",
+                f"“{group.name}”使用旧项目结构，已按原样打开，不会备份或迁移。",
+            )
+        elif issues:
+            self.home_page.remember_structure_issues(issues)
+            affected = "、".join(issue.project_path.name for issue in issues[:3])
+            suffix = "等项目" if len(issues) > 3 else ""
+            self._handle_structure_notice(
+                group.root,
+                self.home_page._structure_issue_key(issues),
+                f"{affected}{suffix}的文件夹被改名或删除，相关功能暂不可用。",
+            )
+            logger.warning(
+                "Project folders changed; root=%s; issues=%s",
+                group.root,
+                " | ".join(issue.summary() for issue in issues),
+            )
+        else:
+            self._handle_structure_notice(group.root, "", "")
+        self.show_home_page()
         return True
 
     def edit_rules(self) -> None:
@@ -249,149 +285,6 @@ class MainWindow(QMainWindow):
             return
         if dialog.exec():
             self.show_toast("任务规则已保存")
-
-    def _offer_legacy_migration(self, root: Path) -> None:
-        if self._migration_in_progress:
-            return
-        answer = QMessageBox.question(
-            self,
-            "检测到旧项目结构",
-            "检测到旧项目结构，是否备份并迁移为“产品迭代”结构？\n\n"
-            f"项目组：{root}\n\n"
-            "迁移前会在同级目录保留完整备份；同名文件不会覆盖。",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        self._migration_in_progress = True
-        dialog = QProgressDialog("正在准备迁移…", "", 0, 0, self)
-        dialog.setWindowTitle("迁移项目结构")
-        dialog.setCancelButton(None)
-        dialog.setMinimumDuration(0)
-        dialog.show()
-
-        def operation(progress):
-            return self.project_service.migrate_legacy_group(root, progress)
-
-        def succeeded(result) -> None:
-            dialog.close()
-            self.show_toast(f"迁移完成，备份已保存到 {result.backup_root.name}")
-            self.load_project_group(result.group_root)
-
-        def failed(exc: BaseException) -> None:
-            dialog.close()
-            self.show_error(str(exc))
-
-        def finished() -> None:
-            self._migration_in_progress = False
-
-        self._run_background(
-            operation,
-            succeeded,
-            failed,
-            finished,
-            stage_handler=dialog.setLabelText,
-        )
-
-    def _offer_project_structure_repair(self, issues) -> None:
-        details = "\n".join(issue.summary() for issue in issues)
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setWindowTitle("项目目录名称发生变化")
-        box.setText("检测到一个或多个标准目录缺失。")
-        box.setInformativeText(
-            details
-            + "\n\n控制台不会猜测或自动改名。请选择每个标准目录实际对应的文件夹后再修复。"
-        )
-        repair_button = box.addButton("选择对应文件夹并修复", QMessageBox.ButtonRole.AcceptRole)
-        open_button = box.addButton("查看目录", QMessageBox.ButtonRole.ActionRole)
-        cancel_button = box.addButton("暂不处理", QMessageBox.ButtonRole.RejectRole)
-        box.setDefaultButton(cancel_button)
-        box.exec()
-        if box.clickedButton() is open_button:
-            self.project_service.open_in_file_manager(issues[0].project_path)
-            return
-        if box.clickedButton() is not repair_button:
-            return
-        repairs: list[tuple[Path, dict[str, Path]]] = []
-        for issue in issues:
-            mapping: dict[str, Path] = {}
-            for expected in issue.missing_directories:
-                selected = QFileDialog.getExistingDirectory(
-                    self,
-                    f"为 {issue.project_path.name} 的“{expected}”选择被改名的文件夹",
-                    str(issue.project_path),
-                )
-                if not selected:
-                    return
-                mapping[expected] = Path(selected)
-            repairs.append((issue.project_path, mapping))
-        confirmation = "\n".join(
-            f"{project.name}：" + "；".join(f"{source.name} → {expected}" for expected, source in mapping.items())
-            for project, mapping in repairs
-        )
-        if QMessageBox.question(
-            self,
-            "确认修复目录名称",
-            confirmation + "\n\n只修改文件夹名称，不复制、删除或合并内容。",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        ) != QMessageBox.StandardButton.Yes:
-            return
-        try:
-            for project, mapping in repairs:
-                self.project_service.repair_project_directories(project, mapping)
-        except Exception as exc:
-            self.show_error(str(exc))
-            return
-        self.show_toast("项目目录名称已恢复为标准结构")
-        if self.home_page.group:
-            self.home_page.refresh_current_project()
-
-    def _show_corrupt_group_options(self, root: Path, detail: str) -> None:
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setWindowTitle("项目组结构损坏")
-        box.setText("项目组路径存在，但结构不完整。")
-        box.setInformativeText(
-            f"{detail}\n\n{root}\n\n控制台不会自动重建缺失文件，以免掩盖数据损坏。"
-        )
-        remove_button = box.addButton("从控制台移除", QMessageBox.ButtonRole.DestructiveRole)
-        locate_button = box.addButton("选择移动后的目录", QMessageBox.ButtonRole.ActionRole)
-        open_button = box.addButton("查看目录", QMessageBox.ButtonRole.ActionRole)
-        repair_button = box.addButton("修复项目组", QMessageBox.ButtonRole.ActionRole)
-        cancel_button = box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
-        box.setDefaultButton(cancel_button)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked is remove_button:
-            self.settings_service.remove_project_group(root)
-            self.home_page.set_available_groups(self.settings_service.registered_group_paths())
-            self.show_toast(f"已从控制台移除 {root.name}")
-        elif clicked is locate_button:
-            self.choose_project_group()
-        elif clicked is open_button and root.exists():
-            self.project_service.open_in_file_manager(root)
-        elif clicked is repair_button:
-            rules = root / "AGENT任务规则.md"
-            manifest = root / self.project_service.MANIFEST_NAME
-            if not manifest.is_file():
-                self.show_error("项目组配置缺失，无法安全推断工具绑定；请从备份恢复后重试。")
-            elif not rules.is_file() and QMessageBox.question(
-                self,
-                "确认恢复任务规则",
-                "将从当前内置模板恢复 AGENT任务规则.md。不会修改项目内容，是否继续？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Cancel,
-            ) == QMessageBox.StandardButton.Yes:
-                try:
-                    self.task_service.restore_default_rules(root)
-                    self.load_project_group(root)
-                except Exception as exc:
-                    self.show_error(f"修复项目组失败：{exc}")
-            else:
-                self.show_error("未发现可自动恢复的规则文件问题，请从备份恢复缺失内容。")
 
     def archive_current_project(self) -> None:
         group = self.home_page.group
@@ -445,8 +338,25 @@ class MainWindow(QMainWindow):
         self.completed_page.set_context(group.root)
         self.show_toast(f"{project.name} 已归档到 {destination.parent.name}")
 
-    def show_toast(self, message: str) -> None:
-        self.toast.show_message(message)
+    def show_toast(self, message: str, duration_ms: int = 1800) -> None:
+        self.toast.show_message(message, duration_ms)
+
+    def _handle_structure_notice(
+        self, group_path: Path, fingerprint: str, message: str
+    ) -> None:
+        previous = self.settings_service.structure_notice_fingerprint(group_path)
+        if not fingerprint:
+            if previous:
+                self.settings_service.save_structure_notice_fingerprint(
+                    group_path, ""
+                )
+            return
+        if previous == fingerprint:
+            return
+        self.settings_service.save_structure_notice_fingerprint(
+            group_path, fingerprint
+        )
+        self.show_toast(message, 4200)
 
     def show_error(self, message: str) -> None:
         if self._showing_error_dialog:
@@ -485,18 +395,26 @@ class MainWindow(QMainWindow):
             logger.info("No recent project group to restore")
             self.home_page.set_empty_state()
             if missing:
-                self.show_toast(f"已移除 {len(missing)} 个不存在的项目组记录。")
+                self.show_toast(
+                    f"已移除 {len(missing)} 个不存在的项目组记录。",
+                    3600,
+                )
             return
         for candidate in candidates:
-            if candidate.exists() and self.load_project_group(candidate, persist=False):
+            if candidate.exists() and self.load_project_group(
+                candidate,
+                persist=False,
+                notify_failure=False,
+            ):
                 if missing:
-                    self.show_toast(f"已移除 {len(missing)} 个不存在的项目组记录。")
+                    self.show_toast(
+                        f"已移除 {len(missing)} 个失效记录。",
+                        3600,
+                    )
                 return
         logger.warning("No registered project group could be restored")
         self.settings_service.clear_recent_group_path()
-        self.home_page.set_empty_state("已登记的项目组均不存在或无效，请重新选择。")
-        if missing:
-            self.show_toast(f"已移除 {len(missing)} 个不存在的项目组记录。")
+        self.home_page.set_empty_state("未找到可读取的项目组，可以创建或重新选择。")
 
     def _switch_project_group(self, path: Path) -> None:
         self.load_project_group(path)
@@ -620,7 +538,7 @@ class MainWindow(QMainWindow):
             loaded = any(
                 self.load_project_group(
                     candidate,
-                    offer_recovery=False,
+                    notify_failure=False,
                 )
                 for candidate in ordered
             )
@@ -747,7 +665,6 @@ class MainWindow(QMainWindow):
         if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
             if (
                 self._deletion_in_progress
-                or self._migration_in_progress
                 or self._showing_error_dialog
             ):
                 return

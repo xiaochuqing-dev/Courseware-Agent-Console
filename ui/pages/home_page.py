@@ -55,6 +55,7 @@ class HomePage(QWidget):
     completed_projects_requested = Signal()
     workflow_optimization_requested = Signal()
     toast_requested = Signal(str)
+    structure_notice_requested = Signal(object, str, str)
     error_requested = Signal(str)
     project_selected = Signal(object, str)
     group_switch_requested = Signal(object)
@@ -88,6 +89,7 @@ class HomePage(QWidget):
         self.current_task_content = ""
         self._prompt_dialog: PromptDialog | None = None
         self._acceptance_dialog: AcceptanceDialog | None = None
+        self._structure_notice_key: str | None = None
         self._build_ui()
         self.set_empty_state()
 
@@ -497,6 +499,7 @@ class HomePage(QWidget):
 
     def set_group(self, group: ProjectGroup, preferred_project: str | None = None) -> None:
         self.group = group
+        self._structure_notice_key = None
         self.current_project = None
         self.pending_feedback.clear()
         self.saved_feedback.clear()
@@ -537,6 +540,7 @@ class HomePage(QWidget):
 
     def set_empty_state(self, message: str | None = None) -> None:
         self.group = None
+        self._structure_notice_key = None
         self.current_project = None
         self.current_task_content = ""
         self.pending_feedback.clear()
@@ -599,15 +603,33 @@ class HomePage(QWidget):
         if not self.group:
             return
         if not self.group.root.is_dir():
+            self._notify_structure_once(
+                f"missing-group:{self.group.root}",
+                "项目组文件夹已被改名、移动或删除，已停止刷新。",
+            )
             return
         preferred = self.current_project.name if self.current_project else None
         pending = list(self.pending_feedback)
         try:
-            group = self.project_service.load_project_group(self.group.root)
+            group = self.project_service.load_project_group(
+                self.group.root,
+                allow_legacy=True,
+            )
         except Exception as exc:
-            self.error_requested.emit(f"刷新项目组失败：{exc}")
+            self._notify_structure_once(
+                f"invalid-group:{self.group.root}:{exc}",
+                "项目组文件被改名或删除，相关功能暂不可用。",
+            )
             return
         self.set_group(group, preferred)
+        issues = self.project_service.inspect_group_structure(group.root)
+        if issues:
+            self._notify_structure_once(
+                self._structure_issue_key(issues),
+                "项目文件夹被改名或删除，相关功能暂不可用。",
+            )
+        else:
+            self._clear_structure_notice()
         if preferred and self.current_project and self.current_project.name == preferred:
             self.pending_feedback = pending
             self._refresh_pending_list()
@@ -616,8 +638,45 @@ class HomePage(QWidget):
         if not self.current_project:
             return
         if not self.current_project.path.is_dir():
+            self._notify_structure_once(
+                f"missing-project:{self.current_project.path}",
+                "当前项目文件夹已被改名、移动或删除。",
+            )
             return
+        if self.group:
+            issues = self.project_service.inspect_group_structure(self.group.root)
+            if issues:
+                self._notify_structure_once(
+                    self._structure_issue_key(issues),
+                    "项目文件夹被改名或删除，相关功能暂不可用。",
+                )
+            elif self._structure_notice_key and self._structure_notice_key.startswith(
+                "project-folders:"
+            ):
+                self._clear_structure_notice()
         self._refresh_project_state()
+
+    def remember_structure_issues(self, issues) -> None:
+        if issues:
+            self._structure_notice_key = self._structure_issue_key(issues)
+
+    @staticmethod
+    def _structure_issue_key(issues) -> str:
+        root = issues[0].project_path.parent
+        summaries = "|".join(issue.summary() for issue in issues)
+        return f"project-folders:{root}:{summaries}"
+
+    def _notify_structure_once(self, key: str, message: str) -> None:
+        if self._structure_notice_key == key:
+            return
+        self._structure_notice_key = key
+        if self.group:
+            self.structure_notice_requested.emit(self.group.root, key, message)
+
+    def _clear_structure_notice(self) -> None:
+        self._structure_notice_key = None
+        if self.group:
+            self.structure_notice_requested.emit(self.group.root, "", "")
 
     def _group_selector_activated(self, index: int) -> None:
         data = self.group_selector.itemData(index)
