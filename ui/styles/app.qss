@@ -123,6 +123,18 @@ QPushButton[role="quiet"]:hover {
     background: rgba(218, 241, 233, 175);
 }
 
+QPushButton[danger="true"] {
+    color: #9b4747;
+    background: transparent;
+    border-color: transparent;
+}
+
+QPushButton[danger="true"]:hover {
+    color: #8a3434;
+    background: rgba(252, 232, 230, 220);
+    border-color: rgba(194, 91, 84, 95);
+}
+
 QPushButton[iconOnly="true"] {
     min-width: 38px;
     max-width: 38px;
@@ -280,10 +292,67 @@ QLabel#dropTitle, QLabel#pendingFileName {
     font-weight: 600;
 }
 
+QLabel#taskProjectName {
+    color: #2f7560;
+    font-size: 15px;
+    font-weight: 650;
+    padding-left: 8px;
+}
+
+QLabel#toolBindingStatus {
+    color: #247359;
+    font-size: 12px;
+}
+
+QLabel#toolBindingStatus[status="error"] {
+    color: #a04b45;
+}
+
+QLabel#feedbackStatus {
+    color: #2e765f;
+    font-size: 11px;
+}
+
+QLabel#feedbackStatus[status="error"] {
+    color: #a04b45;
+}
+
 QFrame#pendingFeedbackRow {
     background: rgba(249, 253, 251, 220);
     border: 1px solid rgba(121, 170, 155, 70);
     border-radius: 7px;
+}
+
+QLabel#acceptanceSummary {
+    padding: 10px 12px;
+    border: 1px solid rgba(103, 155, 139, 90);
+    border-radius: 7px;
+    background: rgba(241, 249, 246, 230);
+    color: #256a55;
+    font-weight: 650;
+}
+
+QLabel#acceptanceSummary[status="failed"] {
+    color: #99433f;
+    border-color: rgba(194, 91, 84, 100);
+    background: rgba(253, 239, 237, 230);
+}
+
+QListWidget#acceptanceResultList {
+    background: rgba(249, 253, 251, 220);
+    border: 1px solid rgba(111, 157, 144, 85);
+    border-radius: 7px;
+    padding: 5px;
+}
+
+QListWidget#acceptanceResultList::item {
+    min-height: 38px;
+    padding: 0 10px;
+    border-radius: 6px;
+}
+
+QListWidget#acceptanceResultList::item:selected {
+    background: rgba(207, 237, 226, 220);
 }
 
 QListWidget#workflowProjectList {

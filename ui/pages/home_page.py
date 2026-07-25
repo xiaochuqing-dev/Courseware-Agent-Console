@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from PySide6.QtWidgets import (
     QLayout,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
+    QInputDialog,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -25,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from models import ProjectEntry, ProjectGroup
 from services import (
+    AcceptanceService,
     ArchiveService,
     FeedbackService,
     PendingFeedback,
@@ -33,6 +37,7 @@ from services import (
     TaskService,
 )
 from ui.widgets import (
+    AcceptanceDialog,
     Card,
     ElidedLabel,
     FeedbackDropArea,
@@ -52,6 +57,8 @@ class HomePage(QWidget):
     toast_requested = Signal(str)
     error_requested = Signal(str)
     project_selected = Signal(object, str)
+    group_switch_requested = Signal(object)
+    delete_group_requested = Signal(object)
 
     def __init__(
         self,
@@ -60,6 +67,7 @@ class HomePage(QWidget):
         feedback_service: FeedbackService | None = None,
         archive_service: ArchiveService | None = None,
         prompt_service: PromptService | None = None,
+        acceptance_service: AcceptanceService | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -69,11 +77,17 @@ class HomePage(QWidget):
         self.feedback_service = feedback_service or FeedbackService()
         self.archive_service = archive_service or ArchiveService()
         self.prompt_service = prompt_service or PromptService()
+        self.acceptance_service = acceptance_service or AcceptanceService(
+            project_service, self.archive_service, self.feedback_service
+        )
         self.group: ProjectGroup | None = None
+        self.available_groups: tuple[Path, ...] = ()
         self.current_project: ProjectEntry | None = None
         self.pending_feedback: list[PendingFeedback] = []
+        self.saved_feedback: list[PendingFeedback] = []
         self.current_task_content = ""
         self._prompt_dialog: PromptDialog | None = None
+        self._acceptance_dialog: AcceptanceDialog | None = None
         self._build_ui()
         self.set_empty_state()
 
@@ -128,12 +142,12 @@ class HomePage(QWidget):
         root_layout.addWidget(sidebar)
 
         main_layout = QVBoxLayout()
-        main_layout.setSpacing(14)
+        main_layout.setSpacing(10)
 
         header_card = Card()
         header_layout = QVBoxLayout(header_card)
-        header_layout.setContentsMargins(21, 15, 21, 15)
-        header_layout.setSpacing(9)
+        header_layout.setContentsMargins(18, 11, 18, 11)
+        header_layout.setSpacing(7)
 
         top_row = QHBoxLayout()
         group_label = QLabel("当前项目组")
@@ -152,18 +166,27 @@ class HomePage(QWidget):
         self.refresh_button.clicked.connect(self.refresh_group)
         top_row.addWidget(self.refresh_button)
         top_row.addStretch()
-        header_layout.addLayout(top_row)
-
-        header_actions = QHBoxLayout()
-        header_actions.addStretch()
         self.edit_rules_button = QPushButton("编辑任务规则")
         self.edit_rules_button.clicked.connect(self.edit_rules_requested)
-        header_actions.addWidget(self.edit_rules_button)
+        top_row.addWidget(self.edit_rules_button)
 
         self.archive_button = QPushButton("标记已完成 / 归档")
         self.archive_button.clicked.connect(self.archive_requested)
-        header_actions.addWidget(self.archive_button)
-        header_layout.addLayout(header_actions)
+        top_row.addWidget(self.archive_button)
+        self.delete_group_button = QPushButton()
+        self.delete_group_button.setProperty("iconOnly", True)
+        self.delete_group_button.setProperty("danger", True)
+        self.delete_group_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
+        )
+        self.delete_group_button.setToolTip("移除或删除当前项目组")
+        self.delete_group_button.clicked.connect(
+            lambda: self.delete_group_requested.emit(self.group.root)
+            if self.group
+            else None
+        )
+        top_row.addWidget(self.delete_group_button)
+        header_layout.addLayout(top_row)
 
         path_row = QHBoxLayout()
         path_title = QLabel("根目录")
@@ -173,11 +196,13 @@ class HomePage(QWidget):
         self.root_path_label.setObjectName("mutedText")
         self.root_path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         path_row.addWidget(self.root_path_label, 1)
-        self.open_root_button = QPushButton("打开")
+        self.open_root_button = QPushButton()
+        self.open_root_button.setProperty("iconOnly", True)
         self.open_root_button.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon)
         )
         self.open_root_button.clicked.connect(self._open_group_root)
+        self.open_root_button.setToolTip("打开项目组根目录")
         path_row.addWidget(self.open_root_button)
         header_layout.addLayout(path_row)
         main_layout.addWidget(header_card)
@@ -235,7 +260,7 @@ class HomePage(QWidget):
         work_layout = QVBoxLayout(scroll_content)
         work_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
         work_layout.setContentsMargins(0, 0, 8, 4)
-        work_layout.setSpacing(14)
+        work_layout.setSpacing(10)
         self.task_card = self._build_task_card()
         self.feedback_card = self._build_feedback_card()
         work_layout.addWidget(self.task_card)
@@ -249,13 +274,16 @@ class HomePage(QWidget):
     def _build_task_card(self) -> Card:
         task_card = Card()
         task_layout = QVBoxLayout(task_card)
-        task_layout.setContentsMargins(24, 19, 24, 19)
-        task_layout.setSpacing(12)
+        task_layout.setContentsMargins(20, 14, 20, 14)
+        task_layout.setSpacing(9)
 
         title_row = QHBoxLayout()
         task_title = QLabel("当前任务")
         task_title.setObjectName("sectionTitle")
         title_row.addWidget(task_title)
+        self.current_project_label = QLabel()
+        self.current_project_label.setObjectName("taskProjectName")
+        title_row.addWidget(self.current_project_label)
         title_row.addStretch()
         self.latest_product_label = ElidedLabel("最新产品：无")
         self.latest_product_label.setObjectName("mutedText")
@@ -263,15 +291,7 @@ class HomePage(QWidget):
         task_layout.addLayout(title_row)
 
         details_row = QHBoxLayout()
-        details_row.setSpacing(20)
-        project_column = QVBoxLayout()
-        project_field = QLabel("当前项目")
-        project_field.setObjectName("fieldLabel")
-        project_column.addWidget(project_field)
-        self.current_project_label = QLabel()
-        self.current_project_label.setObjectName("sectionTitle")
-        project_column.addWidget(self.current_project_label)
-        details_row.addLayout(project_column, 1)
+        details_row.setSpacing(12)
 
         mode_column = QVBoxLayout()
         mode_label = QLabel("任务类型")
@@ -308,6 +328,11 @@ class HomePage(QWidget):
         )
         round_layout.addWidget(self.feedback_round_combo)
         details_row.addWidget(self.round_widget)
+        details_row.addStretch(1)
+        self.tools_binding_label = QLabel("工具绑定：未检查")
+        self.tools_binding_label.setObjectName("toolBindingStatus")
+        self.tools_binding_label.setWordWrap(True)
+        details_row.addWidget(self.tools_binding_label)
         self.round_widget.hide()
         task_layout.addLayout(details_row)
 
@@ -319,14 +344,14 @@ class HomePage(QWidget):
         requirements_column.addWidget(requirements_label)
         self.requirements_input = QPlainTextEdit()
         self.requirements_input.setPlaceholderText("仅填写本次额外约束")
-        self.requirements_input.setMinimumHeight(78)
-        self.requirements_input.setMaximumHeight(92)
+        self.requirements_input.setMinimumHeight(62)
+        self.requirements_input.setMaximumHeight(76)
         self.requirements_input.setMaximumWidth(760)
         requirements_column.addWidget(self.requirements_input)
         task_body.addLayout(requirements_column, 3)
 
         task_state_column = QVBoxLayout()
-        task_state_column.setSpacing(8)
+        task_state_column.setSpacing(5)
         task_state_label = QLabel("任务状态")
         task_state_label.setObjectName("fieldLabel")
         task_state_column.addWidget(task_state_label)
@@ -334,6 +359,9 @@ class HomePage(QWidget):
         self.task_status_text.setObjectName("mutedText")
         self.task_status_text.setWordWrap(True)
         task_state_column.addWidget(self.task_status_text)
+        self.acceptance_status_label = QLabel("验收状态：未验收")
+        self.acceptance_status_label.setObjectName("mutedText")
+        task_state_column.addWidget(self.acceptance_status_label)
         self.task_preview_button = QPushButton("查看当前任务")
         self.task_preview_button.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
@@ -341,7 +369,6 @@ class HomePage(QWidget):
         self.task_preview_button.clicked.connect(self._show_task_preview)
         self.task_preview_button.setEnabled(False)
         task_state_column.addWidget(self.task_preview_button)
-        task_state_column.addStretch()
         task_body.addLayout(task_state_column, 1)
         task_layout.addLayout(task_body)
 
@@ -438,26 +465,50 @@ class HomePage(QWidget):
         self.new_round_button.clicked.connect(self._save_to_new_round)
         save_actions.addWidget(self.new_round_button)
         layout.addLayout(save_actions)
+
+        saved_header = QHBoxLayout()
+        saved_label = QLabel("已保存反馈")
+        saved_label.setObjectName("fieldLabel")
+        saved_header.addWidget(saved_label)
+        self.saved_count_label = QLabel("0 项")
+        self.saved_count_label.setObjectName("mutedText")
+        saved_header.addWidget(self.saved_count_label)
+        saved_header.addStretch()
+        layout.addLayout(saved_header)
+
+        self.saved_scroll = QScrollArea()
+        self.saved_scroll.setWidgetResizable(True)
+        self.saved_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.saved_scroll.setMinimumHeight(54)
+        self.saved_scroll.setMaximumHeight(152)
+        self.saved_container = QWidget()
+        self.saved_layout = QVBoxLayout(self.saved_container)
+        self.saved_layout.setContentsMargins(0, 0, 0, 0)
+        self.saved_layout.setSpacing(5)
+        self.saved_scroll.setWidget(self.saved_container)
+        layout.addWidget(self.saved_scroll)
+        self._refresh_saved_list()
         return card
 
     def set_group(self, group: ProjectGroup, preferred_project: str | None = None) -> None:
         self.group = group
         self.current_project = None
         self.pending_feedback.clear()
+        self.saved_feedback.clear()
         self._refresh_pending_list()
-        self.group_selector.blockSignals(True)
-        self.group_selector.clear()
-        self.group_selector.addItem(group.name)
-        self.group_selector.addItem("选择其他项目组…")
-        self.group_selector.setCurrentIndex(0)
-        self.group_selector.blockSignals(False)
+        self._refresh_saved_list()
+        self._populate_group_selector()
         self.root_path_label.setText(str(group.root))
+        self.root_path_label.setToolTip(str(group.root))
         for widget in (
             self.edit_rules_button,
             self.open_root_button,
             self.refresh_button,
             self.completed_button,
             self.workflow_button,
+            self.delete_group_button,
         ):
             widget.setEnabled(True)
 
@@ -486,15 +537,13 @@ class HomePage(QWidget):
         self.current_project = None
         self.current_task_content = ""
         self.pending_feedback.clear()
+        self.saved_feedback.clear()
         self._refresh_pending_list()
+        self._refresh_saved_list()
         self.project_list.clear()
-        self.group_selector.blockSignals(True)
-        self.group_selector.clear()
-        self.group_selector.addItem("未选择项目组")
-        self.group_selector.addItem("选择已有项目组…")
-        self.group_selector.setCurrentIndex(0)
-        self.group_selector.blockSignals(False)
-        self.root_path_label.setText("无")
+        self._populate_group_selector()
+        self.root_path_label.setText("尚未选择项目组")
+        self.root_path_label.setToolTip("")
         for widget in (
             self.edit_rules_button,
             self.open_root_button,
@@ -506,6 +555,7 @@ class HomePage(QWidget):
             self.task_preview_button,
             self.acceptance_button,
             self.record_button,
+            self.delete_group_button,
         ):
             widget.setEnabled(False)
         self.empty_title.setText("课件项目")
@@ -515,7 +565,32 @@ class HomePage(QWidget):
         self.empty_completed_button.hide()
         self.content_stack.setCurrentIndex(0)
         self.task_status_text.setText("尚未生成当前任务")
+        self.current_project_label.clear()
+        self.tools_binding_label.setText("工具绑定：未选择项目组")
+        self.acceptance_status_label.setText("验收状态：未验收")
         self._update_task_mode_state()
+
+    def set_available_groups(self, group_paths: tuple[Path, ...]) -> None:
+        self.available_groups = tuple(Path(path).resolve() for path in group_paths)
+        self._populate_group_selector()
+
+    def _populate_group_selector(self) -> None:
+        current_path = self.group.root.resolve() if self.group else None
+        self.group_selector.blockSignals(True)
+        self.group_selector.clear()
+        selected_index = -1
+        for path in self.available_groups:
+            index = self.group_selector.count()
+            self.group_selector.addItem(path.name, str(path))
+            self.group_selector.setItemData(index, str(path), Qt.ItemDataRole.ToolTipRole)
+            if current_path is not None and path == current_path:
+                selected_index = index
+        if not self.available_groups:
+            self.group_selector.addItem("未选择项目组", "")
+            selected_index = 0
+        self.group_selector.addItem("选择已有项目组…", None)
+        self.group_selector.setCurrentIndex(selected_index if selected_index >= 0 else 0)
+        self.group_selector.blockSignals(False)
 
     def refresh_group(self) -> None:
         if not self.group:
@@ -541,9 +616,16 @@ class HomePage(QWidget):
         self._refresh_project_state()
 
     def _group_selector_activated(self, index: int) -> None:
-        if index == 1:
-            self.group_selector.setCurrentIndex(0)
+        data = self.group_selector.itemData(index)
+        if data is None:
+            self._populate_group_selector()
             self.choose_group_requested.emit()
+            return
+        if not data:
+            return
+        path = Path(str(data)).resolve()
+        if not self.group or path != self.group.root.resolve():
+            self.group_switch_requested.emit(path)
 
     def _on_project_selected(
         self, current: QListWidgetItem | None, previous: QListWidgetItem | None
@@ -594,6 +676,28 @@ class HomePage(QWidget):
         self.task_preview_button.setEnabled(has_task)
         self.task_status_text.setText(self._task_status(task_content))
 
+        try:
+            if not self.group:
+                raise ValueError("项目组未加载")
+            self.project_service.validate_group_resources(self.group.root)
+            self.tools_binding_label.setText("工具绑定：workflow / template / validate 已核对")
+            self.tools_binding_label.setProperty("status", "ready")
+            self.tools_binding_label.setToolTip(str(self.group.root / "项目组配置.json"))
+        except Exception as exc:
+            self.tools_binding_label.setText("工具绑定：不可用于生成或验收")
+            self.tools_binding_label.setProperty("status", "error")
+            self.tools_binding_label.setToolTip(str(exc))
+        self.tools_binding_label.style().unpolish(self.tools_binding_label)
+        self.tools_binding_label.style().polish(self.tools_binding_label)
+
+        acceptance = self.acceptance_service.latest_report(self.current_project.path)
+        if not acceptance:
+            self.acceptance_status_label.setText("验收状态：未验收")
+        elif self.acceptance_service.has_current_passing_report(self.current_project.path):
+            self.acceptance_status_label.setText("验收状态：已通过")
+        else:
+            self.acceptance_status_label.setText("验收状态：未通过或已过期")
+
         latest_product = self.archive_service.latest_product(self.current_project.path)
         self.latest_product_label.setText(
             f"最新产品：{latest_product.name}" if latest_product else "最新产品：无"
@@ -606,9 +710,16 @@ class HomePage(QWidget):
         if rounds:
             self.feedback_round_combo.setCurrentIndex(len(rounds) - 1)
             self.latest_feedback_label.setText(f"当前最新反馈：第{rounds[-1]}轮")
+            self.saved_feedback = list(
+                self.feedback_service.saved_items(
+                    self.current_project.path, rounds[-1]
+                )
+            )
         else:
             self.latest_feedback_label.setText("尚无反馈轮次")
+            self.saved_feedback = []
         self.feedback_round_combo.blockSignals(False)
+        self._refresh_saved_list()
         self._update_feedback_actions()
         self._update_task_mode_state()
 
@@ -702,25 +813,34 @@ class HomePage(QWidget):
         self._prompt_dialog.exec()
 
     def _show_acceptance_prompt(self) -> None:
-        if not self.current_project:
+        if not self.current_project or not self.group:
             return
         try:
-            if not self.group:
-                raise ValueError("当前项目组未加载。")
-            self.project_service.validate_project_structure(
+            report = self.acceptance_service.run(
                 self.group.root, self.current_project.path
             )
-            prompt = self.prompt_service.product_acceptance_prompt(self.current_project.path)
         except Exception as exc:
-            self.error_requested.emit(f"无法生成产品验收 Prompt：{exc}")
+            self.error_requested.emit(f"完整产品验收无法执行：{exc}")
             return
-        self._prompt_dialog = PromptDialog(
-            "完整产品验收", prompt, self, "复制验收 Prompt"
+        self._acceptance_dialog = AcceptanceDialog(report, self)
+        self._acceptance_dialog.rerun_requested.connect(
+            lambda: self._rerun_acceptance(self._acceptance_dialog)
         )
-        self._prompt_dialog.exec()
+        self._acceptance_dialog.exec()
+        self._refresh_project_state()
+
+    def _rerun_acceptance(self, dialog: AcceptanceDialog | None) -> None:
+        if dialog is not None:
+            dialog.accept()
+        self._show_acceptance_prompt()
 
     def _choose_feedback_files(self) -> None:
-        selected, _ = QFileDialog.getOpenFileNames(self, "选择客户反馈文件")
+        selected, _ = QFileDialog.getOpenFileNames(
+            self,
+            "选择客户反馈文件",
+            "",
+            "支持的反馈材料 (*.pdf *.txt *.png *.jpg *.jpeg)",
+        )
         if selected:
             self._add_feedback_files([Path(path) for path in selected])
 
@@ -767,18 +887,31 @@ class HomePage(QWidget):
 
     def _add_feedback_files(self, paths: list[Path]) -> None:
         errors: list[str] = []
+        fingerprints = {
+            item.fingerprint for item in self.pending_feedback if item.fingerprint
+        }
         for path in paths:
             try:
                 item = self.feedback_service.pending_from_file(path, self._pending_names())
             except Exception as exc:
                 errors.append(f"{path.name or path}：{exc}")
                 continue
+            if item.fingerprint and item.fingerprint in fingerprints:
+                errors.append(f"{path.name}：内容与待保存列表中的材料重复，已忽略。")
+                continue
             self.pending_feedback.append(item)
+            fingerprints.add(item.fingerprint)
         self._refresh_pending_list()
         if errors:
             self.error_requested.emit("部分资料未加入：\n" + "\n".join(errors))
 
     def _append_pending(self, item: PendingFeedback) -> None:
+        if item.fingerprint and any(
+            existing.fingerprint == item.fingerprint
+            for existing in self.pending_feedback
+        ):
+            self.error_requested.emit("该内容已在待保存列表中，未重复添加。")
+            return
         self.pending_feedback.append(item)
         self._refresh_pending_list()
 
@@ -786,6 +919,19 @@ class HomePage(QWidget):
         return {item.name for item in self.pending_feedback}
 
     def _remove_pending(self, item_id: str) -> None:
+        item = self._pending_item(item_id)
+        if item is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            "确认移除待保存反馈",
+            f"将从待保存列表移除：\n{item.name}\n\n"
+            "该材料尚未写入项目。移除后需要重新粘贴、拖拽或选择才能恢复。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
         self.pending_feedback = [
             item for item in self.pending_feedback if item.item_id != item_id
         ]
@@ -807,9 +953,123 @@ class HomePage(QWidget):
             for feedback in self.pending_feedback:
                 row = PendingFeedbackRow(feedback)
                 row.remove_requested.connect(self._remove_pending)
+                row.preview_requested.connect(self._preview_pending)
+                row.edit_requested.connect(self._edit_pending)
                 self.pending_layout.addWidget(row)
         self.pending_count_label.setText(f"{len(self.pending_feedback)} 项")
         self._update_feedback_actions()
+
+    def _pending_item(self, item_id: str) -> PendingFeedback | None:
+        return next(
+            (item for item in self.pending_feedback if item.item_id == item_id),
+            None,
+        )
+
+    def _feedback_item(self, item_id: str) -> PendingFeedback | None:
+        return next(
+            (
+                item
+                for item in [*self.pending_feedback, *self.saved_feedback]
+                if item.item_id == item_id
+            ),
+            None,
+        )
+
+    def _refresh_saved_list(self) -> None:
+        if not hasattr(self, "saved_layout"):
+            return
+        while self.saved_layout.count():
+            layout_item = self.saved_layout.takeAt(0)
+            if layout_item.widget():
+                layout_item.widget().hide()
+                layout_item.widget().deleteLater()
+        if not self.saved_feedback:
+            empty = QLabel("最新反馈轮次尚无已保存材料。")
+            empty.setObjectName("mutedText")
+            self.saved_layout.addWidget(empty)
+        else:
+            for feedback in self.saved_feedback:
+                row = PendingFeedbackRow(feedback, read_only=True)
+                row.preview_requested.connect(self._preview_pending)
+                self.saved_layout.addWidget(row)
+        self.saved_count_label.setText(f"{len(self.saved_feedback)} 项")
+
+    def _preview_pending(self, item_id: str) -> None:
+        item = self._feedback_item(item_id)
+        if item is None:
+            return
+        if item.kind == "text":
+            try:
+                if item.content is not None:
+                    text = item.content.decode("utf-8-sig")
+                elif item.source_path is not None:
+                    text = item.source_path.read_text(encoding="utf-8-sig")
+                else:
+                    text = item.preview
+            except Exception as exc:
+                self.error_requested.emit(f"无法预览 {item.name}：{exc}")
+                return
+            self._prompt_dialog = PromptDialog(item.name, text, self, "复制全文")
+            self._prompt_dialog.exec()
+            return
+        if item.source_path is not None:
+            self._open_path(item.source_path)
+            return
+        if item.kind == "image" and item.content:
+            pixmap = QPixmap()
+            pixmap.loadFromData(item.content)
+            box = QMessageBox(self)
+            box.setWindowTitle(item.name)
+            box.setText(item.detail)
+            box.setIconPixmap(
+                pixmap.scaled(
+                    640,
+                    420,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+            box.exec()
+
+    def _edit_pending(self, item_id: str) -> None:
+        item = self._pending_item(item_id)
+        if item is None or item.kind != "text":
+            return
+        try:
+            original = (
+                item.content.decode("utf-8-sig")
+                if item.content is not None
+                else item.source_path.read_text(encoding="utf-8-sig")
+                if item.source_path is not None
+                else item.preview
+            )
+        except Exception as exc:
+            self.error_requested.emit(f"无法编辑 {item.name}：{exc}")
+            return
+        updated, accepted = QInputDialog.getMultiLineText(
+            self, "编辑文字反馈", item.name, original
+        )
+        if not accepted:
+            return
+        try:
+            parsed = self.feedback_service.pending_from_text(updated)
+        except Exception as exc:
+            self.error_requested.emit(f"文字反馈未更新：{exc}")
+            return
+        replacement = replace(
+            item,
+            source_path=None,
+            content=parsed.content,
+            preview=parsed.preview,
+            size_bytes=parsed.size_bytes,
+            detail=parsed.detail,
+            fingerprint=parsed.fingerprint,
+        )
+        self.pending_feedback = [
+            replacement if current.item_id == item_id else current
+            for current in self.pending_feedback
+        ]
+        self._refresh_pending_list()
 
     def _update_feedback_actions(self) -> None:
         latest = (

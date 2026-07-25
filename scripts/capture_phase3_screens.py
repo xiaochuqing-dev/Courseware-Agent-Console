@@ -22,6 +22,7 @@ from services import (  # noqa: E402
     PromptService,
     SettingsService,
     TaskService,
+    ToolBinding,
 )
 from ui.main_window import MainWindow  # noqa: E402
 from ui.widgets import PromptDialog  # noqa: E402
@@ -119,8 +120,14 @@ def main() -> int:
         feedback_service = FeedbackService()
         archive_service = ArchiveService()
         prompt_service = PromptService(ROOT / "resources", archive_service)
+        tools = ROOT / "resources" / "default_public_tools"
+        binding = ToolBinding(
+            tools / "WORKFLOW.md",
+            tools / "template.html",
+            tools / "validate-tool.js",
+        )
         group = project_service.create_project_group(
-            "阶段三六项目完整回归项目组", 6, preview_root, json_files
+            "阶段三六项目完整回归项目组", 6, preview_root, json_files, binding
         )
         settings = SettingsService(
             QSettings(str(preview_root / "phase3.ini"), QSettings.Format.IniFormat)
@@ -144,10 +151,9 @@ def main() -> int:
 
         home.requirements_input.setPlainText("保留薄荷绿视觉，并验证常用分辨率。")
         home._generate_task()
-        products3 = project3.path / "产品迭代"
-        (products3 / "初始版本.html").write_text(
-            "<!doctype html><html><body>项目3初始版本</body></html>", encoding="utf-8"
-        )
+        products3 = project3.path / "工作文件"
+        template_bytes = binding.template.read_bytes()
+        (products3 / "初始版本.html").write_bytes(template_bytes)
         home.refresh_current_project()
 
         window.resize(1366, 768)
@@ -162,6 +168,7 @@ def main() -> int:
         create.count_input.setValue(6)
         create.location_input.setText(str(preview_root))
         create.json_files = list(json_files)
+        create.set_tool_paths(binding.workflow, binding.template, binding.validate)
         create._refresh_mapping_list()
         app.processEvents()
         _save_exact(window, artifacts / "phase3-create-project.png")
@@ -177,9 +184,7 @@ def main() -> int:
         home._save_to_new_round()
         home.feedback_task_button.click()
         home._generate_task()
-        (products3 / "第1轮修改.html").write_text(
-            "<!doctype html><html><body>项目3第1轮修改</body></html>", encoding="utf-8"
-        )
+        (products3 / "第1轮修改.html").write_bytes(template_bytes)
 
         second_round_image = sources / "第二轮圈画.png"
         _make_image(second_round_image, "#cce4ef")
@@ -196,9 +201,7 @@ def main() -> int:
         home._save_to_new_round()
         home.requirements_input.setPlainText("第1轮确认的整体配色不要重新设计。")
         home._generate_task()
-        (products3 / "第2轮修改.html").write_text(
-            "<!doctype html><html><body>项目3第2轮修改</body></html>", encoding="utf-8"
-        )
+        (products3 / "第2轮修改.html").write_bytes(template_bytes)
         home.refresh_current_project()
         if archive_service.latest_product(project3.path).name != "第2轮修改.html":
             raise RuntimeError("最新产品识别失败。")
@@ -253,17 +256,22 @@ def main() -> int:
 
         for project in group.projects[:2]:
             task_service.generate_first_build_task(project.path, "工作流复盘样本")
-            (project.path / "产品迭代" / "初始版本.html").write_text(
-                f"<!doctype html><html><body>{project.name}</body></html>", encoding="utf-8"
-            )
+            (project.path / "工作文件" / "初始版本.html").write_bytes(template_bytes)
             (project.path / "项目记录.md").write_text(
                 "# 项目记录\n\n## 首次制作\n\n已完成制作与验证。\n",
                 encoding="utf-8",
             )
+            if not window.acceptance_service.run(group.root, project.path).passed:
+                raise RuntimeError(f"{project.name} 未通过完整产品验收。")
             archive_service.archive_project(group.root, project.name)
 
         window.load_project_group(group.root)
         window.home_page.project_list.setCurrentRow(0)
+        current = window.home_page.current_project
+        if current is None or not window.acceptance_service.run(
+            group.root, current.path
+        ).passed:
+            raise RuntimeError("当前项目未通过完整产品验收。")
         with patch.object(
             QMessageBox,
             "question",

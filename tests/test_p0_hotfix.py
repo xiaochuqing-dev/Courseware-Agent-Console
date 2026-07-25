@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 from services import ProjectService, SettingsService, TaskService, ValidationError
 from ui.main_window import MainWindow
 from ui.pages.create_project_page import CreateProjectPage
+from tests.helpers import tool_binding
 
 
 @pytest.fixture(scope="module")
@@ -38,6 +39,8 @@ def test_json_dialog_appends_multiple_batches_and_ignores_duplicates(
 ) -> None:
     files = make_json_files(tmp_path / "sources")
     page = CreateProjectPage(ProjectService(resource_root))
+    binding = tool_binding(resource_root)
+    page.set_tool_paths(binding.workflow, binding.template, binding.validate)
     page.count_input.setValue(6)
     selections = iter(
         [
@@ -70,6 +73,8 @@ def test_json_mapping_order_delete_and_count_changes_preserve_files(
 ) -> None:
     files = make_json_files(tmp_path / "mapping")
     page = CreateProjectPage(ProjectService(resource_root))
+    binding = tool_binding(resource_root)
+    page.set_tool_paths(binding.workflow, binding.template, binding.validate)
     page.count_input.setValue(6)
     page.add_json_files(files)
 
@@ -100,6 +105,8 @@ def test_real_six_project_creation_preserves_mapping(
 ) -> None:
     files = make_json_files(tmp_path / "six-sources")
     page = CreateProjectPage(ProjectService(resource_root))
+    binding = tool_binding(resource_root)
+    page.set_tool_paths(binding.workflow, binding.template, binding.validate)
     page.name_input.setText("六项目热修复验收")
     page.count_input.setValue(6)
     page.location_input.setText(str(tmp_path))
@@ -134,7 +141,9 @@ def test_invalid_json_is_rejected_without_partial_directory(
     service = ProjectService(resource_root)
 
     with pytest.raises(ValidationError, match="JSON 文件无法解析"):
-        service.create_project_group("非法JSON", 1, tmp_path, [invalid])
+        service.create_project_group(
+            "非法JSON", 1, tmp_path, [invalid], tool_binding(resource_root)
+        )
 
     assert not (tmp_path / "非法JSON").exists()
 
@@ -147,6 +156,8 @@ def test_one_batch_six_and_ten_cancelled_dialogs_keep_page_usable(
 ) -> None:
     files = make_json_files(tmp_path / "one-batch")
     page = CreateProjectPage(ProjectService(resource_root))
+    binding = tool_binding(resource_root)
+    page.set_tool_paths(binding.workflow, binding.template, binding.validate)
     page.count_input.setValue(6)
     page.add_json_files(files)
     monkeypatch.setattr(QFileDialog, "getOpenFileNames", lambda *args: ([], ""))
@@ -170,15 +181,6 @@ def test_create_page_switch_is_constant_time_and_reuses_one_page(
     app: QApplication, resource_root: Path, tmp_path: Path
 ) -> None:
     project_service = ProjectService(resource_root)
-    calls = 0
-    original = project_service.public_tools_status
-
-    def counted_status() -> dict[str, bool]:
-        nonlocal calls
-        calls += 1
-        return original()
-
-    project_service.public_tools_status = counted_status  # type: ignore[method-assign]
     settings = SettingsService(
         QSettings(str(tmp_path / "switch.ini"), QSettings.Format.IniFormat)
     )
@@ -193,7 +195,6 @@ def test_create_page_switch_is_constant_time_and_reuses_one_page(
         window.show_home_page()
         app.processEvents()
 
-    assert calls == 1
     assert len(window.create_page.findChildren(QWidget)) == child_widget_count
     window.close()
     app.processEvents()
@@ -216,10 +217,7 @@ def test_hidden_create_page_flow_layout_does_not_cover_form_controls(
     app.processEvents()
 
     page = window.create_page
-    labels = [
-        page.tools_status_layout.itemAt(index).widget()
-        for index in range(page.tools_status_layout.count())
-    ]
+    labels = list(page.tool_status_labels.values())
     assert all(label is not None for label in labels)
     assert all(label.geometry().height() < 100 for label in labels if label)
     assert len({label.geometry().topLeft() for label in labels if label}) == len(labels)
@@ -228,11 +226,6 @@ def test_hidden_create_page_flow_layout_does_not_cover_form_controls(
     assert QApplication.widgetAt(center) is page.name_input
     import_center = page.import_button.mapToGlobal(page.import_button.rect().center())
     assert QApplication.widgetAt(import_center) is page.import_button
-    assert all(
-        label.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        for label in labels
-        if label
-    )
     window.close()
     app.processEvents()
 
@@ -242,7 +235,9 @@ def test_restart_restores_last_selected_project_and_invalid_name_falls_back(
 ) -> None:
     files = make_json_files(tmp_path / "restore-sources", 3)
     project_service = ProjectService(resource_root)
-    group = project_service.create_project_group("恢复项目组", 3, tmp_path, files)
+    group = project_service.create_project_group(
+        "恢复项目组", 3, tmp_path, files, tool_binding(resource_root)
+    )
     ini_path = tmp_path / "restore.ini"
     settings = SettingsService(QSettings(str(ini_path), QSettings.Format.IniFormat))
     settings.save_recent_group_path(group.root)

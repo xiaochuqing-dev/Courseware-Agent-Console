@@ -25,9 +25,11 @@ class FeedbackDropArea(QFrame):
         self.setObjectName("feedbackDropArea")
         self.setAcceptDrops(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(18, 13, 18, 13)
-        layout.setSpacing(12)
+        self.setMinimumHeight(118)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(5)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         icon = QLabel()
         icon.setPixmap(
@@ -35,23 +37,21 @@ class FeedbackDropArea(QFrame):
             .standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
             .pixmap(26, 26)
         )
-        layout.addWidget(icon)
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(icon, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        text_layout = QVBoxLayout()
-        text_layout.setSpacing(2)
-        title = QLabel("Ctrl+V 粘贴微信截图、文字或已复制文件")
+        title = QLabel("拖拽或粘贴反馈材料到这里")
         title.setObjectName("dropTitle")
-        title.setWordWrap(True)
-        text_layout.addWidget(title)
-        hint = QLabel("也可以从资源管理器拖入一个或多个具体文件")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+        hint = QLabel("支持截图、文字、PDF、TXT、PNG、JPG、JPEG")
         hint.setObjectName("mutedText")
-        hint.setWordWrap(True)
-        text_layout.addWidget(hint)
-        layout.addLayout(text_layout, 1)
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(hint)
 
-        browse = QPushButton("选择文件")
-        browse.clicked.connect(self.browse_requested)
-        layout.addWidget(browse)
+        self.browse_button = QPushButton("选择文件")
+        self.browse_button.clicked.connect(self.browse_requested)
+        layout.addWidget(self.browse_button, 0, Qt.AlignmentFlag.AlignHCenter)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.matches(QKeySequence.StandardKey.Paste):
@@ -62,6 +62,13 @@ class FeedbackDropArea(QFrame):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         self.setFocus()
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and not self.browse_button.geometry().contains(event.position().toPoint())
+        ):
+            self.browse_requested.emit()
+            event.accept()
+            return
         super().mousePressEvent(event)
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
@@ -76,13 +83,21 @@ class FeedbackDropArea(QFrame):
 
 class PendingFeedbackRow(QFrame):
     remove_requested = Signal(str)
+    preview_requested = Signal(str)
+    edit_requested = Signal(str)
 
-    def __init__(self, feedback: PendingFeedback, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        feedback: PendingFeedback,
+        parent: QWidget | None = None,
+        read_only: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.feedback = feedback
         self.setObjectName("pendingFeedbackRow")
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 5, 6, 5)
+        self.setMinimumHeight(66)
+        layout.setContentsMargins(10, 7, 7, 7)
         layout.setSpacing(10)
 
         thumbnail = QLabel()
@@ -104,18 +119,49 @@ class PendingFeedbackRow(QFrame):
         name = ElidedLabel(feedback.name)
         name.setObjectName("pendingFileName")
         text_layout.addWidget(name)
-        detail = feedback.preview or self._kind_text(feedback)
+        detail = feedback.detail or feedback.preview or self._kind_text(feedback)
         preview = ElidedLabel(detail, mode=Qt.TextElideMode.ElideRight)
         preview.setObjectName("mutedText")
         text_layout.addWidget(preview)
+        status = QLabel(feedback.status)
+        status.setObjectName("feedbackStatus")
+        status.setProperty("status", "error" if feedback.error else "ready")
+        status.setToolTip(feedback.error)
+        text_layout.addWidget(status)
         layout.addLayout(text_layout, 1)
 
-        remove = QPushButton("×")
-        remove.setProperty("role", "quiet")
-        remove.setProperty("iconOnly", True)
-        remove.setToolTip("移除待保存反馈")
-        remove.clicked.connect(lambda: self.remove_requested.emit(feedback.item_id))
-        layout.addWidget(remove)
+        preview_button = QPushButton()
+        preview_button.setProperty("role", "quiet")
+        preview_button.setProperty("iconOnly", True)
+        preview_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
+        )
+        preview_button.setToolTip("预览反馈材料")
+        preview_button.clicked.connect(
+            lambda: self.preview_requested.emit(feedback.item_id)
+        )
+        layout.addWidget(preview_button)
+
+        if feedback.kind == "text" and not read_only:
+            edit = QPushButton()
+            edit.setProperty("role", "quiet")
+            edit.setProperty("iconOnly", True)
+            edit.setIcon(
+                self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
+            )
+            edit.setToolTip("编辑文字反馈")
+            edit.clicked.connect(lambda: self.edit_requested.emit(feedback.item_id))
+            layout.addWidget(edit)
+
+        if not read_only:
+            remove = QPushButton()
+            remove.setProperty("role", "quiet")
+            remove.setProperty("danger", True)
+            remove.setProperty("iconOnly", True)
+            remove.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
+            remove.setToolTip("移除待保存反馈")
+            remove.clicked.connect(lambda: self.remove_requested.emit(feedback.item_id))
+            layout.addWidget(remove)
 
     def _preview_pixmap(self, feedback: PendingFeedback) -> QPixmap:
         pixmap = QPixmap()

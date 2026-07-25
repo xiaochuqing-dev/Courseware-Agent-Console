@@ -22,6 +22,7 @@ from services import (  # noqa: E402
     PromptService,
     SettingsService,
     TaskService,
+    ToolBinding,
 )
 from ui.main_window import MainWindow  # noqa: E402
 from ui.widgets import PromptDialog  # noqa: E402
@@ -69,8 +70,14 @@ def main() -> int:
         feedback_service = FeedbackService()
         archive_service = ArchiveService()
         prompt_service = PromptService(ROOT / "resources", archive_service)
+        tools = ROOT / "resources" / "default_public_tools"
+        binding = ToolBinding(
+            tools / "WORKFLOW.md",
+            tools / "template.html",
+            tools / "validate-tool.js",
+        )
         group = project_service.create_project_group(
-            "九年级示例项目组", 3, preview_root, json_files
+            "九年级示例项目组", 3, preview_root, json_files, binding
         )
         settings = SettingsService(
             QSettings(str(preview_root / "preview.ini"), QSettings.Format.IniFormat)
@@ -89,10 +96,9 @@ def main() -> int:
         project = window.home_page.current_project
         if project is None:
             raise RuntimeError("项目3未加载")
-        products = project.path / "产品迭代"
-        (products / "初始版本.html").write_text(
-            "<!doctype html><html><body>初始版本</body></html>", encoding="utf-8"
-        )
+        products = project.path / "工作文件"
+        template_bytes = binding.template.read_bytes()
+        (products / "初始版本.html").write_bytes(template_bytes)
         window.home_page.refresh_current_project()
         window.show()
         app.processEvents()
@@ -124,9 +130,7 @@ def main() -> int:
         home._save_to_new_round()
         home.feedback_task_button.click()
         home._generate_task()
-        (products / "第1轮修改.html").write_text(
-            "<!doctype html><html><body>第1轮修改</body></html>", encoding="utf-8"
-        )
+        (products / "第1轮修改.html").write_bytes(template_bytes)
 
         second_round_image = sources / "第二轮圈画.png"
         _make_feedback_image(second_round_image, "#cce4ef")
@@ -158,9 +162,7 @@ def main() -> int:
         home._save_to_new_round()
         home.requirements_input.setPlainText("第1轮确认的整体配色不要重新设计。")
         home._generate_task()
-        (products / "第2轮修改.html").write_text(
-            "<!doctype html><html><body>第2轮修改</body></html>", encoding="utf-8"
-        )
+        (products / "第2轮修改.html").write_bytes(template_bytes)
         home.refresh_current_project()
         assert archive_service.latest_product(project.path).name == "第2轮修改.html"
 
@@ -174,6 +176,10 @@ def main() -> int:
         if not acceptance.grab().save(str(artifacts / "phase2-acceptance.png")):
             raise RuntimeError("产品验收截图保存失败")
         acceptance.close()
+
+        report = window.acceptance_service.run(group.root, project.path)
+        if not report.passed:
+            raise RuntimeError("阶段二示例课件未通过完整产品验收")
 
         with patch.object(
             QMessageBox,

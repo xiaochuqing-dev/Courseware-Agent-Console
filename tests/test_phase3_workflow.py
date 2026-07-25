@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QApplication, QBoxLayout
 from services import ArchiveService, ProjectService, PromptService, SettingsService, TaskService
 from ui.main_window import MainWindow
 from ui.pages import CreateProjectPage
+from tests.helpers import tool_binding
 
 
 @pytest.fixture
@@ -19,11 +20,13 @@ def completed_group(tmp_path: Path):
         source.write_text(json.dumps({"index": index}), encoding="utf-8")
         sources.append(source)
     project_service = ProjectService(resource_root)
-    group = project_service.create_project_group("工作流复盘样本", 3, tmp_path, sources)
+    group = project_service.create_project_group(
+        "工作流复盘样本", 3, tmp_path, sources, tool_binding(resource_root)
+    )
     archive = ArchiveService()
     destinations: list[Path] = []
     for project in group.projects:
-        (project.path / "产品迭代" / "初始版本.html").write_text(
+        (project.path / "工作文件" / "初始版本.html").write_text(
             "product", encoding="utf-8"
         )
         destinations.append(archive.archive_project(group.root, project.name))

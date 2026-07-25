@@ -13,7 +13,12 @@ from PySide6.QtGui import QGuiApplication, QImage, QPainter  # noqa: E402
 from PySide6.QtWidgets import QWidget  # noqa: E402
 
 from app import create_application  # noqa: E402
-from services import ProjectService, SettingsService, TaskService  # noqa: E402
+from services import (  # noqa: E402
+    ProjectService,
+    SettingsService,
+    TaskService,
+    ToolBinding,
+)
 from ui.main_window import MainWindow  # noqa: E402
 
 
@@ -73,6 +78,13 @@ def main() -> int:
         create.count_input.setValue(6)
         create.location_input.setText(str(preview_root))
         create.location_input.setCursorPosition(0)
+        tools = ROOT / "resources" / "default_public_tools"
+        binding = ToolBinding(
+            tools / "WORKFLOW.md",
+            tools / "template.html",
+            tools / "validate-tool.js",
+        )
+        create.set_tool_paths(binding.workflow, binding.template, binding.validate)
         create.add_json_files(json_files[:3])
         app.processEvents()
         save_widget(window, artifacts / "hotfix-create-project-3-of-6.png")

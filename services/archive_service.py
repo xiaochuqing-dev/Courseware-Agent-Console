@@ -21,8 +21,14 @@ class ArchiveService:
     VERSION_PATTERN = re.compile(r"^第([1-9]\d*)轮修改\.html$", re.IGNORECASE)
     PROJECT_PATTERN = re.compile(r"^项目([1-9]\d*)$")
 
+    @staticmethod
+    def product_root(project_root: Path) -> Path:
+        project = Path(project_root)
+        current = project / "工作文件"
+        return current if current.is_dir() else project / "产品迭代"
+
     def latest_product(self, project_root: Path) -> Path | None:
-        products_root = Path(project_root) / "产品迭代"
+        products_root = self.product_root(project_root)
         if not products_root.is_dir():
             return None
         versions: list[tuple[int, Path]] = []
@@ -52,7 +58,7 @@ class ArchiveService:
             raise ArchiveError(f"项目目录不存在或已被改名：{source}")
         if self.latest_product(source) is None:
             raise NoProductVersionError(
-                f"当前项目没有可用产品版本：{source / '产品迭代'}。"
+                f"当前项目没有可用产品版本：{source / '工作文件'}。"
                 "请确认初始版本或第 N 轮修改 HTML 已保存。"
             )
         destination = self.archive_destination(group_path, project_name)

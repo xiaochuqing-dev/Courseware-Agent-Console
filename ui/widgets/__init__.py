@@ -1,4 +1,5 @@
 from .background_widget import BackgroundWidget
+from .acceptance_dialog import AcceptanceDialog
 from .card import Card
 from .elided_label import ElidedLabel
 from .feedback_drop import FeedbackDropArea, PendingFeedbackRow
@@ -8,6 +9,7 @@ from .toast import Toast
 
 __all__ = [
     "BackgroundWidget",
+    "AcceptanceDialog",
     "Card",
     "ElidedLabel",
     "FeedbackDropArea",

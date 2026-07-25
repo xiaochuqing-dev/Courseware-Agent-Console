@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from services import ProjectCreationError, ProjectService, TargetExistsError
+from services import ProjectCreationError, ProjectService, TargetExistsError, ToolBinding
 from services.app_logging import LOGGER_NAME
 from ui.widgets import Card, FlowLayout
 
@@ -41,6 +41,8 @@ class CreateProjectPage(QWidget):
         self.setObjectName("page")
         self.project_service = project_service
         self.json_files: list[Path] = []
+        self.tool_inputs: dict[str, QLineEdit] = {}
+        self.tool_status_labels: dict[str, QLabel] = {}
         self._build_ui()
         self.refresh_public_tools()
 
@@ -128,11 +130,44 @@ class CreateProjectPage(QWidget):
         self.json_status.setWordWrap(True)
         form_layout.addWidget(self.json_status)
 
-        tools_label = QLabel("公共工具")
+        tools_label = QLabel("真实公共工具")
         tools_label.setObjectName("fieldLabel")
         form_layout.addWidget(tools_label)
-        self.tools_status_layout = FlowLayout(horizontal_spacing=18, vertical_spacing=6)
-        form_layout.addLayout(self.tools_status_layout)
+
+        tools_hint = QLabel("创建前必须分别选择 workflow、template、validate；不会使用内置默认文件。")
+        tools_hint.setObjectName("mutedText")
+        tools_hint.setWordWrap(True)
+        form_layout.addWidget(tools_hint)
+
+        tool_names = {
+            "workflow": ("workflow", "Markdown 文件 (*.md);;所有文件 (*)"),
+            "template": ("template", "HTML 文件 (*.html *.htm);;所有文件 (*)"),
+            "validate": ("validate", "JavaScript 文件 (*.js);;所有文件 (*)"),
+        }
+        for role, (label_text, file_filter) in tool_names.items():
+            row = QHBoxLayout()
+            label = QLabel(label_text)
+            label.setObjectName("fieldLabel")
+            label.setFixedWidth(62)
+            row.addWidget(label)
+            path_input = QLineEdit()
+            path_input.setPlaceholderText(f"选择真实 {label_text} 文件")
+            path_input.textChanged.connect(self.refresh_public_tools)
+            row.addWidget(path_input, 1)
+            choose = QPushButton("选择")
+            choose.clicked.connect(
+                lambda _checked=False, key=role, filters=file_filter: self._choose_tool_file(
+                    key, filters
+                )
+            )
+            row.addWidget(choose)
+            form_layout.addLayout(row)
+            status = QLabel("未选择")
+            status.setObjectName("jsonStatus")
+            status.setWordWrap(True)
+            form_layout.addWidget(status)
+            self.tool_inputs[role] = path_input
+            self.tool_status_labels[role] = status
         form_layout.addStretch()
 
         content.addWidget(form_card, 5)
@@ -210,16 +245,53 @@ class CreateProjectPage(QWidget):
         self._update_json_summary()
 
     def refresh_public_tools(self) -> None:
-        while self.tools_status_layout.count():
-            item = self.tools_status_layout.takeAt(0)
-            if item.widget():
-                item.widget().hide()
-                item.widget().deleteLater()
-        for name, exists in self.project_service.public_tools_status().items():
-            label = QLabel(f"{'✓' if exists else '缺失'}  {name}")
-            label.setObjectName("successText" if exists else "errorBanner")
-            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-            self.tools_status_layout.addWidget(label)
+        for role, path_input in self.tool_inputs.items():
+            value = path_input.text().strip()
+            label = self.tool_status_labels[role]
+            if not value:
+                label.setText("未选择，当前不能创建项目组。")
+                label.setProperty("status", "warning")
+            else:
+                path = Path(value).expanduser()
+                if not path.is_file():
+                    label.setText(f"路径无效：{path}")
+                    label.setProperty("status", "warning")
+                elif path.stat().st_size == 0:
+                    label.setText(f"文件为空：{path}")
+                    label.setProperty("status", "warning")
+                else:
+                    label.setText(f"已选择：{path.name} · {path.stat().st_size:,} B")
+                    label.setProperty("status", "normal")
+            label.style().unpolish(label)
+            label.style().polish(label)
+        self._update_create_state()
+
+    def _choose_tool_file(self, role: str, file_filter: str) -> None:
+        current = self.tool_inputs[role].text().strip()
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            f"选择真实 {role} 文件",
+            str(Path(current).parent) if current else "",
+            file_filter,
+        )
+        if selected:
+            self.tool_inputs[role].setText(selected)
+
+    def set_tool_paths(self, workflow: Path, template: Path, validate: Path) -> None:
+        self.tool_inputs["workflow"].setText(str(workflow))
+        self.tool_inputs["template"].setText(str(template))
+        self.tool_inputs["validate"].setText(str(validate))
+        self.refresh_public_tools()
+
+    def _tool_binding(self) -> ToolBinding | None:
+        values = {role: field.text().strip() for role, field in self.tool_inputs.items()}
+        if not all(values.values()):
+            return None
+        return ToolBinding(
+            workflow=Path(values["workflow"]),
+            template=Path(values["template"]),
+            validate=Path(values["validate"]),
+        )
 
     def _default_desktop_path(self) -> str:
         desktop = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DesktopLocation)
@@ -327,7 +399,17 @@ class CreateProjectPage(QWidget):
             )
         else:
             self._set_json_status("JSON 数量与项目数量一致。")
-        self.create_button.setEnabled(selected == required)
+        self._update_create_state()
+
+    def _update_create_state(self) -> None:
+        json_ready = len(self.json_files) == self.count_input.value()
+        tools_ready = bool(self.tool_inputs) and all(
+            Path(field.text().strip()).expanduser().is_file()
+            and Path(field.text().strip()).expanduser().stat().st_size > 0
+            for field in self.tool_inputs.values()
+            if field.text().strip()
+        ) and all(field.text().strip() for field in self.tool_inputs.values())
+        self.create_button.setEnabled(bool(json_ready and tools_ready))
 
     def _set_json_status(self, message: str, warning: bool = False) -> None:
         self.json_status.setText(message)
@@ -348,6 +430,13 @@ class CreateProjectPage(QWidget):
                 "请删除多余文件或调整项目数量。"
             )
             return
+        tool_binding = self._tool_binding()
+        if tool_binding is None:
+            self._show_error(
+                "缺少真实公共工具。请分别选择 workflow、template、validate 文件；"
+                "当前不会回退到内置默认文件。"
+            )
+            return
         logger.info("Project creation started; project_count=%d", required)
         try:
             group = self.project_service.create_project_group(
@@ -355,6 +444,7 @@ class CreateProjectPage(QWidget):
                 project_count=self.count_input.value(),
                 location=Path(self.location_input.text().strip()),
                 json_files=self.json_files,
+                tool_binding=tool_binding,
             )
         except TargetExistsError as exc:
             logger.warning("Project creation stopped because target already exists")

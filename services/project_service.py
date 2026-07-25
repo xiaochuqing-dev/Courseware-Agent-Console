@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -31,8 +34,28 @@ class InvalidProjectGroupError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class ToolBinding:
+    workflow: Path
+    template: Path
+    validate: Path
+
+    def paths(self) -> dict[str, Path]:
+        return {
+            "workflow": Path(self.workflow),
+            "template": Path(self.template),
+            "validate": Path(self.validate),
+        }
+
+
 class ProjectService:
     REQUIRED_PUBLIC_TOOLS = ("WORKFLOW.md", "template.html", "validate-tool.js")
+    TOOL_ROLES = {
+        "workflow": "WORKFLOW.md",
+        "template": "template.html",
+        "validate": "validate-tool.js",
+    }
+    MANIFEST_NAME = "项目组配置.json"
     PROJECT_PATTERN = re.compile(r"^项目([1-9]\d*)$")
     INVALID_NAME_PATTERN = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
     RESERVED_NAMES = {
@@ -53,14 +76,84 @@ class ProjectService:
         self.public_tools_root = self.resource_root / "default_public_tools"
         self.prompt_templates_root = self.resource_root / "prompt_templates"
 
-    def public_tools_status(self) -> dict[str, bool]:
-        return {
-            name: (self.public_tools_root / name).is_file()
-            for name in self.REQUIRED_PUBLIC_TOOLS
-        }
+    @staticmethod
+    def file_sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with Path(path).open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest().upper()
 
-    def missing_public_tools(self) -> list[str]:
-        return [name for name, exists in self.public_tools_status().items() if not exists]
+    def validate_tool_binding(self, binding: ToolBinding | None) -> dict[str, dict[str, str | int]]:
+        if binding is None:
+            missing = "、".join(self.TOOL_ROLES.values())
+            raise ValidationError(
+                f"尚未选择真实公共工具：{missing}。请分别选择 workflow、template、validate 文件后再创建。"
+            )
+
+        metadata: dict[str, dict[str, str | int]] = {}
+        for role, expected_name in self.TOOL_ROLES.items():
+            source = binding.paths()[role].expanduser()
+            display_role = {"workflow": "workflow", "template": "template", "validate": "validate"}[role]
+            if not source.exists():
+                raise ValidationError(
+                    f"{display_role} 文件不存在：{source}。请重新选择真实的 {expected_name}。"
+                )
+            if not source.is_file():
+                raise ValidationError(f"{display_role} 路径不是文件：{source}")
+            try:
+                size = source.stat().st_size
+                raw = source.read_bytes()
+            except OSError as exc:
+                raise ValidationError(f"{display_role} 文件无法读取：{source}（{exc}）") from exc
+            if size == 0 or not raw.strip():
+                raise ValidationError(f"{display_role} 文件为空：{source}")
+            try:
+                raw.decode("utf-8-sig")
+            except UnicodeDecodeError as exc:
+                raise ValidationError(f"{display_role} 文件不是可解析的 UTF-8 文本：{source}") from exc
+            metadata[role] = {
+                "source_path": str(source.resolve()),
+                "source_name": source.name,
+                "size": size,
+                "sha256": self.file_sha256(source),
+                "copied_name": expected_name,
+            }
+
+        workflow_text = binding.workflow.read_text(encoding="utf-8-sig")
+        for referenced in (binding.template.name, binding.validate.name):
+            if referenced not in workflow_text:
+                raise ValidationError(
+                    f"workflow 未明确引用 {referenced}：{binding.workflow}。请确认三份文件属于同一套工具。"
+                )
+
+        validator = binding.validate.resolve()
+        syntax = subprocess.run(
+            ["node", "--check", str(validator)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if syntax.returncode != 0:
+            detail = (syntax.stderr or syntax.stdout).strip()
+            raise ValidationError(f"validate 文件语法检查失败：{validator}\n{detail}")
+
+        template_check = subprocess.run(
+            ["node", str(validator), str(binding.template.resolve())],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if template_check.returncode != 0:
+            detail = (template_check.stdout or template_check.stderr).strip()
+            raise ValidationError(
+                f"template 未通过所选 validate：{binding.template.resolve()}\n{detail}"
+            )
+        return metadata
 
     def validate_creation(
         self,
@@ -68,6 +161,7 @@ class ProjectService:
         project_count: int,
         location: Path,
         json_files: list[Path],
+        tool_binding: ToolBinding | None,
     ) -> Path:
         name = group_name.strip()
         if not name:
@@ -85,16 +179,14 @@ class ProjectService:
         target = parent / name
         if target.exists():
             raise TargetExistsError(target)
-        longest_target = target / f"项目{project_count}" / "产品迭代" / "第999轮修改.html"
+        longest_target = target / f"项目{project_count}" / "工作文件" / "第999轮修改.html"
         if len(str(longest_target.resolve())) >= 240:
             raise ValidationError(
                 "目标路径过长，后续保存版本可能失败。请缩短项目组名称或选择更靠近磁盘根目录的位置："
                 f"{target}"
             )
 
-        missing = self.missing_public_tools()
-        if missing:
-            raise ValidationError(f"缺少公共工具：{', '.join(missing)}")
+        self.validate_tool_binding(tool_binding)
 
         rules_template = self.prompt_templates_root / "AGENT任务规则.md"
         if not rules_template.is_file():
@@ -129,8 +221,13 @@ class ProjectService:
         project_count: int,
         location: Path,
         json_files: list[Path],
+        tool_binding: ToolBinding | None = None,
     ) -> ProjectGroup:
-        target = self.validate_creation(group_name, project_count, location, json_files)
+        target = self.validate_creation(
+            group_name, project_count, location, json_files, tool_binding
+        )
+        assert tool_binding is not None
+        tool_metadata = self.validate_tool_binding(tool_binding)
         staging = target.parent / f".{target.name}.creating-{uuid4().hex}"
         try:
             staging.mkdir()
@@ -141,15 +238,29 @@ class ProjectService:
 
             tools_target = staging / "公共工具"
             tools_target.mkdir()
-            for name in self.REQUIRED_PUBLIC_TOOLS:
-                shutil.copy2(self.public_tools_root / name, tools_target / name)
+            for role, name in self.TOOL_ROLES.items():
+                shutil.copy2(tool_binding.paths()[role], tools_target / name)
+
+            manifest = {
+                "schema_version": 1,
+                "group_name": target.name,
+                "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "tools": tool_metadata,
+                "product_directory": "工作文件",
+                "delivery_directory": "最终交付",
+            }
+            (staging / self.MANIFEST_NAME).write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
 
             for index, json_path in enumerate(json_files, start=1):
                 project_root = staging / f"项目{index}"
                 source_root = project_root / "原始需求"
                 source_root.mkdir(parents=True)
                 (project_root / "客户反馈").mkdir()
-                (project_root / "产品迭代").mkdir()
+                (project_root / "工作文件").mkdir()
+                (project_root / "最终交付").mkdir()
                 shutil.copy2(json_path, source_root / Path(json_path).name)
                 (project_root / "当前任务.md").write_text("", encoding="utf-8")
                 (project_root / "项目记录.md").write_text(
@@ -199,6 +310,26 @@ class ProjectService:
                     f"公共工具缺失：{path}。请从原项目组备份恢复该文件后重试。"
                 )
 
+        manifest_path = root / self.MANIFEST_NAME
+        if not manifest_path.is_file():
+            raise FileNotFoundError(
+                f"项目组缺少真实工具绑定记录：{manifest_path}。旧项目组只可导入查看，不能生成新任务或通过验收。"
+            )
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise FileNotFoundError(f"项目组工具绑定记录无法解析：{manifest_path}（{exc}）") from exc
+        tools = manifest.get("tools") if isinstance(manifest, dict) else None
+        if not isinstance(tools, dict):
+            raise FileNotFoundError(f"项目组工具绑定记录缺少 tools：{manifest_path}")
+        for role, name in self.TOOL_ROLES.items():
+            entry = tools.get(role)
+            copied = root / "公共工具" / name
+            if not isinstance(entry, dict) or not entry.get("sha256"):
+                raise FileNotFoundError(f"项目组工具绑定记录缺少 {role} 哈希：{manifest_path}")
+            if self.file_sha256(copied) != str(entry["sha256"]).upper():
+                raise FileNotFoundError(f"项目组绑定的 {role} 文件已变化：{copied}")
+
     def validate_project_structure(self, group_root: Path, project_root: Path) -> None:
         self.validate_group_resources(group_root)
         project = Path(project_root).resolve()
@@ -209,12 +340,38 @@ class ProjectService:
             raise FileNotFoundError(
                 f"原始需求目录为空或不存在：{source}。请恢复原始需求文件后重试。"
             )
-        for directory_name in ("客户反馈", "产品迭代"):
+        for directory_name in ("客户反馈", "工作文件", "最终交付"):
             path = project / directory_name
             if not path.is_dir():
                 raise FileNotFoundError(
                     f"项目目录缺失：{path}。请确认是否需要重新创建空目录。"
                 )
+
+    def read_manifest(self, group_root: Path) -> dict:
+        path = Path(group_root).resolve() / self.MANIFEST_NAME
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise InvalidProjectGroupError(f"项目组配置无法读取：{path}（{exc}）") from exc
+        if not isinstance(data, dict):
+            raise InvalidProjectGroupError(f"项目组配置格式无效：{path}")
+        return data
+
+    def delete_project_group(self, group_root: Path, delete_local_files: bool = False) -> None:
+        root = Path(group_root).expanduser().resolve()
+        if not delete_local_files:
+            return
+        self.load_project_group(root)
+        if root.is_symlink():
+            raise InvalidProjectGroupError("不允许递归删除符号链接项目组。")
+        protected = {
+            Path(root.anchor).resolve(),
+            Path.home().resolve(),
+            Path.home().joinpath("Desktop").resolve(),
+        }
+        if root in protected or len(root.parts) < 4:
+            raise InvalidProjectGroupError(f"拒绝删除范围过大的目录：{root}")
+        shutil.rmtree(root)
 
     @staticmethod
     def open_in_file_manager(path: Path) -> None:

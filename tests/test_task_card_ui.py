@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QApplication
 from services import ProjectService, SettingsService, TaskService
 from ui.main_window import MainWindow
 from ui.widgets import PromptDialog
+from tests.helpers import tool_binding
 
 
 def create_window(tmp_path: Path) -> tuple[QApplication, MainWindow, Path]:
@@ -16,7 +17,13 @@ def create_window(tmp_path: Path) -> tuple[QApplication, MainWindow, Path]:
     source = tmp_path / "source.json"
     source.write_text(json.dumps({"title": "任务卡测试"}), encoding="utf-8")
     project_service = ProjectService(resource_root)
-    group = project_service.create_project_group("任务卡项目组", 1, tmp_path, [source])
+    group = project_service.create_project_group(
+        "任务卡项目组",
+        1,
+        tmp_path,
+        [source],
+        tool_binding(resource_root),
+    )
     settings = SettingsService(
         QSettings(str(tmp_path / "task-card.ini"), QSettings.Format.IniFormat)
     )
@@ -33,7 +40,7 @@ def test_task_card_uses_compact_actions_and_separate_preview(
 
     assert not hasattr(home, "task_preview")
     assert not hasattr(home, "copy_prompt_button")
-    assert home.requirements_input.maximumHeight() == 92
+    assert home.requirements_input.maximumHeight() == 76
     assert home.requirements_input.maximumWidth() == 760
     assert home.generate_button.text() == "生成当前任务"
     assert not home.task_preview_button.isEnabled()

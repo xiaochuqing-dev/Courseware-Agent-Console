@@ -107,7 +107,7 @@ class CompletedProjectsPage(QWidget):
         )
         self.open_project_button.clicked.connect(self._open_project)
         details_layout.addWidget(self.open_project_button)
-        self.open_products_button = QPushButton("打开产品迭代目录")
+        self.open_products_button = QPushButton("打开工作文件目录")
         self.open_products_button.clicked.connect(self._open_products)
         details_layout.addWidget(self.open_products_button)
         self.open_record_button = QPushButton("打开项目记录")
@@ -185,7 +185,7 @@ class CompletedProjectsPage(QWidget):
 
     def _open_products(self) -> None:
         if self.current_project:
-            self._open_path(self.current_project / "产品迭代")
+            self._open_path(self.archive_service.product_root(self.current_project))
 
     def _open_record(self) -> None:
         if self.current_project:

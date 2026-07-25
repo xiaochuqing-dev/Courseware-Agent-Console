@@ -11,7 +11,12 @@ sys.path.insert(0, str(ROOT))
 from PySide6.QtCore import QSettings  # noqa: E402
 
 from app import create_application  # noqa: E402
-from services import ProjectService, SettingsService, TaskService  # noqa: E402
+from services import (  # noqa: E402
+    ProjectService,
+    SettingsService,
+    TaskService,
+    ToolBinding,
+)
 from ui.main_window import MainWindow  # noqa: E402
 
 
@@ -40,8 +45,14 @@ def main() -> int:
 
         project_service = ProjectService(root / "resources")
         task_service = TaskService(root / "resources")
+        tools = root / "resources" / "default_public_tools"
+        binding = ToolBinding(
+            tools / "WORKFLOW.md",
+            tools / "template.html",
+            tools / "validate-tool.js",
+        )
         group = project_service.create_project_group(
-            "九年级示例项目组", 4, preview_root, json_files
+            "九年级示例项目组", 4, preview_root, json_files, binding
         )
         settings = SettingsService(
             QSettings(str(preview_root / "preview.ini"), QSettings.Format.IniFormat)
@@ -59,6 +70,9 @@ def main() -> int:
         window.create_page.count_input.setValue(4)
         window.create_page.location_input.setText(str(preview_root))
         window.create_page.json_files = list(json_files)
+        window.create_page.set_tool_paths(
+            binding.workflow, binding.template, binding.validate
+        )
         window.create_page._refresh_mapping_list()
         app.processEvents()
         if not window.grab().save(str(artifacts / "phase1-create-project.png")):

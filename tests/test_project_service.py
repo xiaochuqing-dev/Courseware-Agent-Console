@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from services import ProjectService, TargetExistsError, ValidationError
+from tests.helpers import tool_binding
 
 
 @pytest.fixture
@@ -28,14 +29,17 @@ def test_create_three_projects_with_explicit_mapping(
         write_json(sources / "M.json", "project-3"),
     ]
 
-    group = project_service.create_project_group("九年级", 3, tmp_path, mappings)
+    group = project_service.create_project_group(
+        "九年级", 3, tmp_path, mappings, tool_binding(project_service.resource_root)
+    )
 
     assert [project.name for project in group.projects] == ["项目1", "项目2", "项目3"]
     for index, source in enumerate(mappings, start=1):
         copied = group.root / f"项目{index}" / "原始需求" / source.name
         assert copied.read_bytes() == source.read_bytes()
         assert (group.root / f"项目{index}" / "客户反馈").is_dir()
-        assert (group.root / f"项目{index}" / "产品迭代").is_dir()
+        assert (group.root / f"项目{index}" / "工作文件").is_dir()
+        assert (group.root / f"项目{index}" / "最终交付").is_dir()
         assert (group.root / f"项目{index}" / "当前任务.md").is_file()
         assert (group.root / f"项目{index}" / "项目记录.md").is_file()
 
@@ -43,6 +47,7 @@ def test_create_three_projects_with_explicit_mapping(
         assert (group.root / "公共工具" / tool_name).read_bytes() == (
             project_service.public_tools_root / tool_name
         ).read_bytes()
+    assert (group.root / project_service.MANIFEST_NAME).is_file()
     assert (group.root / "AGENT任务规则.md").read_bytes() == (
         project_service.prompt_templates_root / "AGENT任务规则.md"
     ).read_bytes()
@@ -53,7 +58,13 @@ def test_count_mismatch_is_rejected_without_partial_directory(
 ) -> None:
     source = write_json(tmp_path / "one.json", "one")
     with pytest.raises(ValidationError, match="JSON 数量与项目数量不一致"):
-        project_service.create_project_group("数量不匹配", 2, tmp_path, [source])
+        project_service.create_project_group(
+            "数量不匹配",
+            2,
+            tmp_path,
+            [source],
+            tool_binding(project_service.resource_root),
+        )
     assert not (tmp_path / "数量不匹配").exists()
     assert not list(tmp_path.glob(".数量不匹配.creating-*"))
 
@@ -68,7 +79,13 @@ def test_existing_target_is_never_overwritten(
     source = write_json(tmp_path / "one.json", "one")
 
     with pytest.raises(TargetExistsError):
-        project_service.create_project_group("已有项目组", 1, tmp_path, [source])
+        project_service.create_project_group(
+            "已有项目组",
+            1,
+            tmp_path,
+            [source],
+            tool_binding(project_service.resource_root),
+        )
     assert sentinel.read_text(encoding="utf-8") == "keep"
 
 
@@ -79,4 +96,3 @@ def test_open_in_file_manager_uses_exact_existing_path(
     monkeypatch.setattr(os, "startfile", opened.append)
     project_service.open_in_file_manager(tmp_path)
     assert opened == [str(tmp_path.resolve())]
-

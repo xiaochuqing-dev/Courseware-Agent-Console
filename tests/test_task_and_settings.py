@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QMessageBox
 
 from services import ProjectService, SettingsService, TaskService
 from ui.main_window import MainWindow
+from tests.helpers import tool_binding
 
 
 def create_group(tmp_path: Path):
@@ -14,7 +15,7 @@ def create_group(tmp_path: Path):
     source = tmp_path / "source.json"
     source.write_text(json.dumps({"title": "测试课件"}, ensure_ascii=False), encoding="utf-8")
     group = ProjectService(resource_root).create_project_group(
-        "测试项目组", 1, tmp_path, [source]
+        "测试项目组", 1, tmp_path, [source], tool_binding(resource_root)
     )
     return resource_root, group
 
@@ -75,9 +76,11 @@ def test_main_window_refreshes_active_and_completed_lists_after_archive(
         source.write_text(json.dumps({"index": index}), encoding="utf-8")
         sources.append(source)
     project_service = ProjectService(resource_root)
-    group = project_service.create_project_group("归档刷新", 3, tmp_path, sources)
+    group = project_service.create_project_group(
+        "归档刷新", 3, tmp_path, sources, tool_binding(resource_root)
+    )
     project3 = group.projects[2]
-    (project3.path / "产品迭代" / "初始版本.html").write_text(
+    (project3.path / "工作文件" / "初始版本.html").write_text(
         "product", encoding="utf-8"
     )
     settings = SettingsService(
@@ -86,6 +89,11 @@ def test_main_window_refreshes_active_and_completed_lists_after_archive(
     window = MainWindow(project_service, TaskService(resource_root), settings)
     window.load_project_group(group.root)
     window.home_page.project_list.setCurrentRow(2)
+    monkeypatch.setattr(
+        window.acceptance_service,
+        "has_current_passing_report",
+        lambda _path: True,
+    )
     monkeypatch.setattr(
         QMessageBox,
         "question",

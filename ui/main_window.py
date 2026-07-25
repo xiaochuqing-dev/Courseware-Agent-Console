@@ -7,6 +7,7 @@ from time import perf_counter
 from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import (
     QFileDialog,
+    QInputDialog,
     QMainWindow,
     QMessageBox,
     QStackedWidget,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from services import (
+    AcceptanceService,
     ArchiveService,
     FeedbackService,
     InvalidProjectGroupError,
@@ -46,6 +48,7 @@ class MainWindow(QMainWindow):
         feedback_service: FeedbackService | None = None,
         archive_service: ArchiveService | None = None,
         prompt_service: PromptService | None = None,
+        acceptance_service: AcceptanceService | None = None,
     ) -> None:
         super().__init__()
         self.project_service = project_service or ProjectService()
@@ -55,6 +58,9 @@ class MainWindow(QMainWindow):
         self.archive_service = archive_service or ArchiveService()
         self.prompt_service = prompt_service or PromptService(
             self.task_service.resource_root, self.archive_service
+        )
+        self.acceptance_service = acceptance_service or AcceptanceService(
+            self.project_service, self.archive_service, self.feedback_service
         )
         self.setWindowTitle("课件 Agent 控制台")
         self.setMinimumSize(860, 560)
@@ -74,6 +80,7 @@ class MainWindow(QMainWindow):
             self.feedback_service,
             self.archive_service,
             self.prompt_service,
+            self.acceptance_service,
         )
         self.create_page = CreateProjectPage(self.project_service)
         self.completed_page = CompletedProjectsPage(
@@ -98,6 +105,8 @@ class MainWindow(QMainWindow):
         self.home_page.toast_requested.connect(self.show_toast)
         self.home_page.error_requested.connect(self.show_error)
         self.home_page.project_selected.connect(self._remember_project_selection)
+        self.home_page.group_switch_requested.connect(self._switch_project_group)
+        self.home_page.delete_group_requested.connect(self.delete_project_group)
         self.create_page.cancelled.connect(self.show_home_page)
         self.create_page.project_created.connect(self._project_created)
         self.create_page.open_existing_requested.connect(self._open_existing_group)
@@ -148,8 +157,18 @@ class MainWindow(QMainWindow):
             self.load_project_group(Path(selected))
 
     def load_project_group(self, path: Path, persist: bool = True) -> bool:
+        target = Path(path).expanduser().resolve()
+        if (
+            self.home_page.group
+            and self.home_page.group.root.resolve() != target
+            and not self._confirm_pending_feedback_before_switch()
+        ):
+            self.home_page.set_available_groups(
+                self.settings_service.registered_group_paths()
+            )
+            return False
         try:
-            group = self.project_service.load_project_group(path)
+            group = self.project_service.load_project_group(target)
         except InvalidProjectGroupError as exc:
             root = Path(path).expanduser().resolve()
             rules_path = root / "AGENT任务规则.md"
@@ -174,12 +193,17 @@ class MainWindow(QMainWindow):
             else:
                 self.show_error(str(exc))
                 return False
+        if persist:
+            self.settings_service.save_recent_group_path(group.root)
+        else:
+            self.settings_service.register_project_group(group.root)
         preferred_project = self.settings_service.last_selected_project(group.root)
+        self.home_page.set_available_groups(
+            self.settings_service.registered_group_paths()
+        )
         self.home_page.set_group(group, preferred_project)
         self.completed_page.set_context(group.root)
         self.workflow_page.set_context(group.root)
-        if persist:
-            self.settings_service.save_recent_group_path(group.root)
         self.show_home_page()
         logger.info("Project group loaded; project_count=%d", len(group.projects))
         return True
@@ -220,6 +244,12 @@ class MainWindow(QMainWindow):
         project = self.home_page.current_project
         if not group or not project:
             return
+        if not self.acceptance_service.has_current_passing_report(project.path):
+            self.show_error(
+                "当前课件尚未通过有效的完整产品验收，不能标记完成或归档。"
+                "请先执行“完整产品验收”；课件修改后需要重新验收。"
+            )
+            return
         latest_product = self.archive_service.latest_product(project.path)
         if latest_product is None:
             self.show_error("当前项目没有可用产品版本。")
@@ -231,7 +261,7 @@ class MainWindow(QMainWindow):
             "确认归档",
             "确认客户已经认可当前版本，并将项目归档？\n\n"
             f"当前项目：{project.name}\n"
-            f"当前最新产品：产品迭代/{latest_product.name}\n"
+            f"当前最新产品：{latest_product.parent.name}/{latest_product.name}\n"
             f"最新反馈轮次：{round_text}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
@@ -268,20 +298,151 @@ class MainWindow(QMainWindow):
         self.load_project_group(path)
 
     def _restore_recent_group(self) -> None:
+        groups = self.settings_service.registered_group_paths()
+        self.home_page.set_available_groups(groups)
         recent = self.settings_service.recent_group_path()
-        if not recent:
+        candidates = []
+        if recent:
+            candidates.append(recent)
+        candidates.extend(group for group in groups if group != recent)
+        if not candidates:
             logger.info("No recent project group to restore")
             self.home_page.set_empty_state()
             return
-        if not recent.exists():
-            logger.warning("Recent project group no longer exists")
-            self.settings_service.clear_recent_group_path()
-            self.home_page.set_empty_state("最近使用的项目组已不存在，请重新选择。")
+        for candidate in candidates:
+            if candidate.exists() and self.load_project_group(candidate, persist=False):
+                return
+        logger.warning("No registered project group could be restored")
+        self.settings_service.clear_recent_group_path()
+        self.home_page.set_empty_state("已登记的项目组均不存在或无效，请重新选择。")
+
+    def _switch_project_group(self, path: Path) -> None:
+        self.load_project_group(path)
+
+    def _confirm_pending_feedback_before_switch(self) -> bool:
+        if not self.home_page.pending_feedback:
+            return True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("存在未保存反馈")
+        box.setText(
+            f"当前有 {len(self.home_page.pending_feedback)} 项反馈尚未保存。"
+        )
+        box.setInformativeText("切换项目组前请选择保存、放弃或取消切换。")
+        save_button = box.addButton("保存为新反馈轮次并切换", QMessageBox.ButtonRole.AcceptRole)
+        discard_button = box.addButton("放弃并切换", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_button = box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel_button)
+        box.exec()
+        if box.clickedButton() is cancel_button:
+            return False
+        if box.clickedButton() is save_button:
+            self.home_page._save_to_new_round()
+            return not self.home_page.pending_feedback
+        return box.clickedButton() is discard_button
+
+    def delete_project_group(self, path: Path) -> None:
+        root = Path(path).expanduser().resolve()
+        registered = list(self.settings_service.registered_group_paths())
+        matching_index = next(
+            (index for index, item in enumerate(registered) if item == root),
+            -1,
+        )
+        if matching_index < 0:
+            self.show_error(f"项目组不在控制台列表中：{root}")
             return
-        if not self.load_project_group(recent, persist=False):
-            logger.warning("Recent project group could not be restored")
+        is_current = bool(
+            self.home_page.group and self.home_page.group.root.resolve() == root
+        )
+        pending_count = len(self.home_page.pending_feedback) if is_current else 0
+        try:
+            group = self.project_service.load_project_group(root)
+        except Exception as exc:
+            self.show_error(f"无法读取待删除项目组：{exc}")
+            return
+        status = "进行中" if group.projects else "已完成或无进行中项目"
+        choice = self._confirm_group_deletion(
+            group.name, status, root, is_current, pending_count
+        )
+        if choice is None:
+            return
+        delete_files = choice == "delete"
+        if delete_files and not self._confirm_local_file_deletion(group.name, root):
+            return
+        try:
+            self.project_service.delete_project_group(root, delete_files)
+        except Exception as exc:
+            self.show_error(f"项目组删除失败，控制台记录和当前状态未改变：{exc}")
+            return
+
+        self.settings_service.remove_project_group(root)
+        remaining = list(self.settings_service.registered_group_paths())
+        if not is_current:
+            self.home_page.set_available_groups(tuple(remaining))
+            self.show_toast(
+                f"已{'删除本地文件并' if delete_files else ''}从控制台移除 {group.name}"
+            )
+            return
+        self.home_page.pending_feedback.clear()
+        if remaining:
+            next_index = min(matching_index, len(remaining) - 1)
+            self.load_project_group(remaining[next_index])
+        else:
             self.settings_service.clear_recent_group_path()
-            self.home_page.set_empty_state("最近使用的目录不是有效项目组，请重新选择。")
+            self.home_page.set_available_groups(())
+            self.home_page.set_empty_state("暂无项目组，请创建或导入项目组。")
+            self.show_home_page()
+        self.show_toast(
+            f"已{'删除本地文件并' if delete_files else ''}从控制台移除 {group.name}"
+        )
+
+    def _confirm_group_deletion(
+        self,
+        group_name: str,
+        status: str,
+        root: Path,
+        is_current: bool,
+        pending_count: int,
+    ) -> str | None:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("移除项目组")
+        box.setText(f"项目组：{group_name}")
+        box.setInformativeText(
+            f"状态：{status}\n"
+            f"完整路径：{root}\n"
+            f"当前项目组：{'是' if is_current else '否'}\n"
+            f"未保存反馈：{pending_count} 项\n"
+            "正在执行的任务：无\n\n"
+            "“仅从控制台移除”会保留全部本地文件，可稍后重新导入。\n"
+            "“删除本地文件”会永久删除该目录及其内容。"
+        )
+        remove_button = box.addButton(
+            "仅从控制台移除", QMessageBox.ButtonRole.AcceptRole
+        )
+        delete_button = box.addButton(
+            "删除项目组及本地文件…", QMessageBox.ButtonRole.DestructiveRole
+        )
+        cancel_button = box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel_button)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is cancel_button:
+            return None
+        if clicked is delete_button:
+            return "delete"
+        return "remove" if clicked is remove_button else None
+
+    def _confirm_local_file_deletion(self, group_name: str, root: Path) -> bool:
+        typed, accepted = QInputDialog.getText(
+            self,
+            "二次确认永久删除",
+            "此操作将永久删除该项目组对应的本地文件，无法通过控制台恢复。\n\n"
+            f"完整路径：{root}\n\n请输入项目组名称“{group_name}”确认：",
+        )
+        if accepted and typed.strip() != group_name:
+            self.show_error("输入的项目组名称不一致，已取消删除。")
+        return bool(accepted and typed.strip() == group_name)
 
     def changeEvent(self, event) -> None:  # noqa: N802
         super().changeEvent(event)

@@ -35,7 +35,7 @@ class PromptService:
         return (
             self._read_template("product_acceptance_prompt.md")
             .replace("{{PROJECT_NAME}}", project_path.name)
-            .replace("{{LATEST_PRODUCT}}", f"产品迭代/{latest.name}")
+            .replace("{{LATEST_PRODUCT}}", f"{latest.parent.name}/{latest.name}")
             .strip()
         )
 
