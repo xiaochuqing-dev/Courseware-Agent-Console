@@ -76,7 +76,7 @@ def _paste_text(home, text: str) -> None:
 def _assert_layout(window: MainWindow) -> None:
     required = (
         window.home_page.generate_button,
-        window.home_page.copy_prompt_button,
+        window.home_page.task_preview_button,
         window.home_page.open_project_button,
         window.home_page.feedback_drop_area,
         window.home_page.new_round_button,
