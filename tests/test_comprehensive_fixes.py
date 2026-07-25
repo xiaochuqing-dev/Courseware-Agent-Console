@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import pytest
 import send2trash
-from PySide6.QtCore import QEvent, QPoint, QSettings
+from PySide6.QtCore import QEvent, QPoint, QSettings, QSize
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -143,6 +143,25 @@ def test_migration_failure_keeps_original_and_named_backup(
     backups = list(tmp_path.glob("迁移失败-迁移前备份-*"))
     assert len(backups) == 1
     assert (backups[0] / original_project.name / "原始需求" / "sentinel.txt").is_file()
+
+
+def test_migration_permission_error_explains_that_the_folder_is_in_use(
+    resource_root: Path,
+) -> None:
+    service = ProjectService(resource_root)
+    message = service._migration_failure_message(
+        PermissionError(13, "Access is denied"), True
+    )
+
+    assert "正在资源管理器中打开" in message
+    assert "请关闭已打开的项目文件夹" in message
+    assert "不会丢失数据" in message
+    assert "migration-original" not in message
+
+
+def test_default_window_size_is_taller_on_large_screens_and_adapts_to_small_ones() -> None:
+    assert MainWindow._preferred_window_size(QSize(1600, 1000)) == QSize(1240, 920)
+    assert MainWindow._preferred_window_size(QSize(1000, 700)) == QSize(976, 668)
 
 
 def test_multiple_renamed_project_directories_require_explicit_mapping(

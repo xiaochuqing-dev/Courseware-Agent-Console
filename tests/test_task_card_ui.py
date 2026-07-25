@@ -47,6 +47,14 @@ def test_task_card_uses_compact_actions_and_separate_preview(
     assert home.acceptance_button.isEnabled()
     assert home.record_button.isEnabled()
 
+    window.resize(1240, 790)
+    window.show()
+    app.processEvents()
+    text_right = home.latest_product_label.mapTo(
+        home.task_card, home.latest_product_label.contentsRect().topRight()
+    ).x()
+    assert text_right < home.task_card.width()
+
     home.requirements_input.setPlainText("先使用第一版补充要求")
     home._generate_task()
     first_content = (project_root / "当前任务.md").read_text(encoding="utf-8")

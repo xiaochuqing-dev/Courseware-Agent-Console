@@ -315,6 +315,7 @@ class HomePage(QWidget):
         self.latest_product_label = ElidedLabel("最新产品：无")
         self.latest_product_label.setObjectName("mutedText")
         self.latest_product_label.setFixedWidth(300)
+        self.latest_product_label.setContentsMargins(0, 0, 12, 0)
         self.latest_product_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         title_row.addWidget(self.latest_product_label)
         task_layout.addLayout(title_row)

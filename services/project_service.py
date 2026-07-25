@@ -918,6 +918,7 @@ class ProjectService:
         staging = root.parent / f".{root.name}.migrating-{uuid4().hex}"
         rollback = root.parent / f".{root.name}.migration-original-{uuid4().hex}"
         conflicts: list[str] = []
+        replacing_group_directory = False
         self._emit(progress, "正在创建迁移工作副本…")
         try:
             shutil.copytree(root, backup)
@@ -1060,6 +1061,7 @@ class ProjectService:
                 encoding="utf-8",
             )
             self._emit(progress, "正在保留完整迁移前备份…")
+            replacing_group_directory = True
             root.rename(rollback)
             try:
                 staging.rename(root)
@@ -1074,10 +1076,29 @@ class ProjectService:
                 rollback.rename(root)
             if isinstance(exc, InvalidProjectGroupError):
                 raise
-            raise ProjectCreationError(f"项目结构迁移失败，原目录和备份均已保留：{exc}") from exc
+            raise ProjectCreationError(
+                self._migration_failure_message(exc, replacing_group_directory)
+            ) from exc
         finally:
             if staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
+
+    @staticmethod
+    def _migration_failure_message(
+        error: BaseException, replacing_group_directory: bool
+    ) -> str:
+        permission_blocked = isinstance(error, PermissionError) or getattr(
+            error, "winerror", None
+        ) in {5, 32, 33}
+        if replacing_group_directory and permission_blocked:
+            return (
+                "无法重命名项目文件夹，因为它正在资源管理器中打开，"
+                "或被其他程序占用。\n\n"
+                "请关闭已打开的项目文件夹，以及正在使用其中内容的程序，"
+                "然后重新点击“预览迁移”。\n\n"
+                "原项目和迁移前备份均已保留，不会丢失数据。"
+            )
+        return f"项目结构迁移失败，原目录和备份均已保留：{error}"
 
     def preview_legacy_migration(self, group_root: Path) -> tuple[tuple[str, str], ...]:
         root = Path(group_root).expanduser().resolve()

@@ -4,7 +4,8 @@ import logging
 from pathlib import Path
 from time import perf_counter
 
-from PySide6.QtCore import QEvent, QThread, QTimer
+from PySide6.QtCore import QEvent, QSize, QThread, QTimer
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QFileDialog,
     QMainWindow,
@@ -72,7 +73,9 @@ class MainWindow(QMainWindow):
         self._relays: set[BackgroundTaskRelay] = set()
         self.setWindowTitle("课件 Agent 控制台")
         self.setMinimumSize(860, 560)
-        self.resize(1240, 790)
+        screen = QGuiApplication.primaryScreen()
+        available_size = screen.availableGeometry().size() if screen else QSize(1240, 952)
+        self.resize(self._preferred_window_size(available_size))
 
         background = BackgroundWidget()
         background_layout = QVBoxLayout(background)
@@ -130,6 +133,14 @@ class MainWindow(QMainWindow):
 
         self.toast = Toast(background, self.home_page.feedback_card)
         self._restore_recent_group()
+
+    @staticmethod
+    def _preferred_window_size(available_size: QSize) -> QSize:
+        horizontal_margin = 24
+        vertical_frame_allowance = 32
+        width = min(1240, max(860, available_size.width() - horizontal_margin))
+        height = min(920, max(560, available_size.height() - vertical_frame_allowance))
+        return QSize(width, height)
 
     def show_home_page(self) -> None:
         logger.info("Page switch: home")
