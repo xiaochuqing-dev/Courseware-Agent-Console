@@ -54,6 +54,16 @@ QLabel#successText {
     font-weight: 600;
 }
 
+QLabel#jsonStatus {
+    color: #67847c;
+    font-size: 12px;
+}
+
+QLabel#jsonStatus[status="warning"] {
+    color: #9a5b32;
+    font-weight: 600;
+}
+
 QPushButton, QToolButton {
     min-height: 40px;
     padding: 0 15px;

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import os
 from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths, Qt, Signal
@@ -22,7 +24,11 @@ from PySide6.QtWidgets import (
 )
 
 from services import ProjectCreationError, ProjectService, TargetExistsError
+from services.app_logging import LOGGER_NAME
 from ui.widgets import Card, FlowLayout
+
+
+logger = logging.getLogger(LOGGER_NAME)
 
 
 class CreateProjectPage(QWidget):
@@ -110,12 +116,17 @@ class CreateProjectPage(QWidget):
         json_header.addWidget(self.json_summary)
         form_layout.addLayout(json_header)
 
-        import_button = QPushButton("选择 JSON 文件")
-        import_button.setIcon(
+        self.import_button = QPushButton("添加 JSON 文件")
+        self.import_button.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
         )
-        import_button.clicked.connect(self._choose_json_files)
-        form_layout.addWidget(import_button)
+        self.import_button.clicked.connect(self._choose_json_files)
+        form_layout.addWidget(self.import_button)
+
+        self.json_status = QLabel()
+        self.json_status.setObjectName("jsonStatus")
+        self.json_status.setWordWrap(True)
+        form_layout.addWidget(self.json_status)
 
         tools_label = QLabel("公共工具")
         tools_label.setObjectName("fieldLabel")
@@ -152,6 +163,15 @@ class CreateProjectPage(QWidget):
         down_button.setToolTip("下移所选 JSON")
         down_button.clicked.connect(lambda: self._move_mapping(1))
         mapping_title_row.addWidget(down_button)
+
+        remove_button = QPushButton()
+        remove_button.setProperty("iconOnly", True)
+        remove_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
+        )
+        remove_button.setToolTip("删除所选 JSON")
+        remove_button.clicked.connect(self._remove_mapping)
+        mapping_title_row.addWidget(remove_button)
         mapping_layout.addLayout(mapping_title_row)
 
         self.mapping_list = QListWidget()
@@ -182,10 +202,10 @@ class CreateProjectPage(QWidget):
         cancel_button = QPushButton("取消")
         cancel_button.clicked.connect(self.cancelled)
         footer.addWidget(cancel_button)
-        create_button = QPushButton("创建项目组")
-        create_button.setProperty("role", "primary")
-        create_button.clicked.connect(self._create_project_group)
-        footer.addWidget(create_button)
+        self.create_button = QPushButton("创建项目组")
+        self.create_button.setProperty("role", "primary")
+        self.create_button.clicked.connect(self._create_project_group)
+        footer.addWidget(self.create_button)
         page_layout.addLayout(footer)
         self._update_json_summary()
 
@@ -214,16 +234,43 @@ class CreateProjectPage(QWidget):
             self.location_input.setText(selected)
 
     def _choose_json_files(self) -> None:
+        logger.info("Opening JSON file selector")
         selected, _ = QFileDialog.getOpenFileNames(
             self,
             "选择原始 JSON",
             "",
             "JSON 文件 (*.json)",
         )
-        if selected:
-            self.json_files = [Path(path) for path in selected]
-            self._refresh_mapping_list()
-            self._hide_error()
+        logger.info("JSON file selector returned %d file(s)", len(selected))
+        if not selected:
+            return
+        added, ignored = self.add_json_files([Path(path) for path in selected])
+        self._hide_error()
+        if ignored:
+            self._set_json_status(
+                f"已添加 {added} 个文件，已忽略 {ignored} 个重复文件。",
+                warning=True,
+            )
+
+    def add_json_files(self, paths: list[Path]) -> tuple[int, int]:
+        existing = {self._path_key(path) for path in self.json_files}
+        added = 0
+        ignored = 0
+        for path in paths:
+            candidate = Path(path)
+            key = self._path_key(candidate)
+            if key in existing:
+                ignored += 1
+                continue
+            self.json_files.append(candidate)
+            existing.add(key)
+            added += 1
+        self._refresh_mapping_list()
+        return added, ignored
+
+    @staticmethod
+    def _path_key(path: Path) -> str:
+        return os.path.normcase(str(Path(path).expanduser().resolve()))
 
     def _move_mapping(self, offset: int) -> None:
         row = self.mapping_list.currentRow()
@@ -236,6 +283,15 @@ class CreateProjectPage(QWidget):
         )
         self._refresh_mapping_list()
         self.mapping_list.setCurrentRow(new_row)
+
+    def _remove_mapping(self) -> None:
+        row = self.mapping_list.currentRow()
+        if row < 0 or row >= len(self.json_files):
+            return
+        self.json_files.pop(row)
+        self._refresh_mapping_list()
+        if self.json_files:
+            self.mapping_list.setCurrentRow(min(row, len(self.json_files) - 1))
 
     def _refresh_mapping_list(self) -> None:
         self.mapping_list.clear()
@@ -256,12 +312,42 @@ class CreateProjectPage(QWidget):
             self.content_layout.setDirection(direction)
 
     def _update_json_summary(self) -> None:
-        self.json_summary.setText(
-            f"已选择 {len(self.json_files)} / 需要 {self.count_input.value()}"
-        )
+        selected = len(self.json_files)
+        required = self.count_input.value()
+        self.json_summary.setText(f"已选择 {selected} / {required}")
+        if selected < required:
+            missing = required - selected
+            self._set_json_status(f"还需要 {missing} 个 JSON 文件。")
+        elif selected > required:
+            self._set_json_status(
+                f"当前已选择 {selected} 个 JSON，但项目数量为 {required}，"
+                "请删除多余文件或调整项目数量。",
+                warning=True,
+            )
+        else:
+            self._set_json_status("JSON 数量与项目数量一致。")
+        self.create_button.setEnabled(selected == required)
+
+    def _set_json_status(self, message: str, warning: bool = False) -> None:
+        self.json_status.setText(message)
+        self.json_status.setProperty("status", "warning" if warning else "normal")
+        self.json_status.style().unpolish(self.json_status)
+        self.json_status.style().polish(self.json_status)
 
     def _create_project_group(self) -> None:
         self._hide_error()
+        selected = len(self.json_files)
+        required = self.count_input.value()
+        if selected < required:
+            self._show_error(f"还需要选择 {required - selected} 个 JSON 文件。")
+            return
+        if selected > required:
+            self._show_error(
+                f"当前已选择 {selected} 个 JSON，但项目数量为 {required}，"
+                "请删除多余文件或调整项目数量。"
+            )
+            return
+        logger.info("Project creation started; project_count=%d", required)
         try:
             group = self.project_service.create_project_group(
                 group_name=self.name_input.text(),
@@ -270,6 +356,7 @@ class CreateProjectPage(QWidget):
                 json_files=self.json_files,
             )
         except TargetExistsError as exc:
+            logger.warning("Project creation stopped because target already exists")
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Icon.Warning)
             box.setWindowTitle("目标目录已存在")
@@ -282,8 +369,10 @@ class CreateProjectPage(QWidget):
                 self.open_existing_requested.emit(exc.path)
             return
         except ProjectCreationError as exc:
+            logger.exception("Project creation failed: %s", type(exc).__name__)
             self._show_error(str(exc))
             return
+        logger.info("Project creation succeeded; project_count=%d", len(group.projects))
         self.project_created.emit(group.root)
 
     def _show_error(self, message: str) -> None:
