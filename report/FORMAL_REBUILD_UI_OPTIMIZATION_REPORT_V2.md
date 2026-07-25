@@ -84,6 +84,10 @@ python app.py --smoke-test：通过。Python compileall：通过。阶段一、P
 
 正式重建结果：6 个项目、6 个通过、0 个失败；每个课件 validate 均为 0 error、0 warning。
 
+Windows EXE 已于 2026-07-25 14:41 重新构建，路径为 C:\Users\xiaochuqing\Desktop\课件Agent控制台\dist\CoursewareAgentConsole.dist\CoursewareAgentConsole.exe，文件大小 27144192 字节，SHA-256 为 5E2ABE8E6AACCDAE0BD3D7F82BF37B5560F583B63370214B4DA2DED8A0E6BA0D。打包资源完整性检查和 EXE --smoke-test 均通过。
+
+桌面快捷方式 C:\Users\xiaochuqing\Desktop\课件 Agent 控制台.lnk 已于 2026-07-25 14:41 更新，目标和工作目录均指向本次新构建目录。已通过该快捷方式实际启动并核对进程路径，验证通过后关闭测试进程。
+
 ## 17. 限制和风险
 
 当前自动验收没有执行真实浏览器中的人工视觉检查。运行环境对直接打开本地 file:// 课件有限制，本轮没有绕过该安全策略；因此报告只确认 Qt 控制台截图、HTML 静态规则和 validate 结果，不声明浏览器人工视觉已通过。验收界面和记录会把这一项显示为警告，并提示在浏览器中检查内容可见性、布局、交互和动画。
