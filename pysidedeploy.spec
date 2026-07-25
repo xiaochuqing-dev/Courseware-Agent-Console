@@ -40,7 +40,7 @@ qml_files =
 excluded_qml_plugins =
 
 # qt modules used. comma separated
-modules = Core,Gui,Test,Widgets
+modules = Core,Gui,Network,Test,Widgets
 
 # qt plugins used by the application. only relevant for desktop deployment
 # for qt plugins used in android application see [android][plugins]
@@ -68,7 +68,7 @@ macos.permissions =
 mode = standalone
 
 # specify any extra nuitka arguments
-extra_args = --quiet --assume-yes-for-downloads --noinclude-qt-translations --windows-console-mode=disable --include-data-dir=resources=resources --include-data-dir=ui/styles=ui/styles --output-filename=CoursewareAgentConsole.exe
+extra_args = --quiet --assume-yes-for-downloads --noinclude-qt-translations --windows-console-mode=disable --include-package=send2trash --include-data-dir=resources=resources --include-data-dir=ui/styles=ui/styles --output-filename=CoursewareAgentConsole.exe
 
 [buildozer]
 

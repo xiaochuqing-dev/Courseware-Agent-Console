@@ -58,7 +58,7 @@ class AcceptanceDialog(QDialog):
         layout.addWidget(self.detail)
 
         actions = QHBoxLayout()
-        open_report = QPushButton("打开验收记录")
+        open_report = QPushButton("打开项目记录")
         open_report.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(report.markdown_path)))
         )

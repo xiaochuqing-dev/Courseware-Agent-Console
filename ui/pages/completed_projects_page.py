@@ -107,7 +107,7 @@ class CompletedProjectsPage(QWidget):
         )
         self.open_project_button.clicked.connect(self._open_project)
         details_layout.addWidget(self.open_project_button)
-        self.open_products_button = QPushButton("打开工作文件目录")
+        self.open_products_button = QPushButton("打开产品迭代目录")
         self.open_products_button.clicked.connect(self._open_products)
         details_layout.addWidget(self.open_products_button)
         self.open_record_button = QPushButton("打开项目记录")

@@ -96,7 +96,7 @@ def main() -> int:
         project = window.home_page.current_project
         if project is None:
             raise RuntimeError("项目3未加载")
-        products = project.path / "工作文件"
+        products = project.path / "产品迭代"
         template_bytes = binding.template.read_bytes()
         (products / "初始版本.html").write_bytes(template_bytes)
         window.home_page.refresh_current_project()

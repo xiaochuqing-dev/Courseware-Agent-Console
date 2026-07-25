@@ -4,7 +4,7 @@ import logging
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QStandardPaths, Qt, Signal
+from PySide6.QtCore import QStandardPaths, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QBoxLayout,
     QFileDialog,
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QProgressBar,
     QScrollArea,
     QSpinBox,
     QStyle,
@@ -23,9 +24,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from services import ProjectCreationError, ProjectService, TargetExistsError, ToolBinding
+from services import (
+    ProjectCreationError,
+    ProjectService,
+    TargetExistsError,
+    ToolBinding,
+    ToolValidationResult,
+)
 from services.app_logging import LOGGER_NAME
 from ui.widgets import Card, FlowLayout
+from ui.workers import BackgroundTaskRelay, BackgroundWorker
 
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -43,6 +51,19 @@ class CreateProjectPage(QWidget):
         self.json_files: list[Path] = []
         self.tool_inputs: dict[str, QLineEdit] = {}
         self.tool_status_labels: dict[str, QLabel] = {}
+        self._creation_in_progress = False
+        self._tool_validation_in_progress = False
+        self._tool_validation_result: ToolValidationResult | None = None
+        self._validated_binding_key: tuple[str, str, str] | None = None
+        self._validation_generation = 0
+        self._threads: set[QThread] = set()
+        self._workers: set[BackgroundWorker] = set()
+        self._relays: set[BackgroundTaskRelay] = set()
+        self._form_controls: list[QWidget] = []
+        self._prevalidation_timer = QTimer(self)
+        self._prevalidation_timer.setSingleShot(True)
+        self._prevalidation_timer.setInterval(250)
+        self._prevalidation_timer.timeout.connect(self._start_tool_prevalidation)
         self._build_ui()
         self.refresh_public_tools()
 
@@ -52,13 +73,13 @@ class CreateProjectPage(QWidget):
         page_layout.setSpacing(20)
 
         header = QHBoxLayout()
-        back_button = QPushButton()
-        back_button.setProperty("role", "quiet")
-        back_button.setProperty("iconOnly", True)
-        back_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowBack))
-        back_button.setToolTip("返回首页")
-        back_button.clicked.connect(self.cancelled)
-        header.addWidget(back_button)
+        self.back_button = QPushButton()
+        self.back_button.setProperty("role", "quiet")
+        self.back_button.setProperty("iconOnly", True)
+        self.back_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowBack))
+        self.back_button.setToolTip("返回首页")
+        self.back_button.clicked.connect(self._cancel_requested)
+        header.addWidget(self.back_button)
 
         title = QLabel("创建项目组")
         title.setObjectName("pageTitle")
@@ -99,12 +120,12 @@ class CreateProjectPage(QWidget):
         location_row = QHBoxLayout()
         self.location_input = QLineEdit(self._default_desktop_path())
         location_row.addWidget(self.location_input, 1)
-        choose_location_button = QPushButton("选择")
-        choose_location_button.setIcon(
+        self.choose_location_button = QPushButton("选择")
+        self.choose_location_button.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon)
         )
-        choose_location_button.clicked.connect(self._choose_location)
-        location_row.addWidget(choose_location_button)
+        self.choose_location_button.clicked.connect(self._choose_location)
+        location_row.addWidget(self.choose_location_button)
         fields.addRow("创建位置", location_row)
         form_layout.addLayout(fields)
 
@@ -152,7 +173,7 @@ class CreateProjectPage(QWidget):
             row.addWidget(label)
             path_input = QLineEdit()
             path_input.setPlaceholderText(f"选择真实 {label_text} 文件")
-            path_input.textChanged.connect(self.refresh_public_tools)
+            path_input.textChanged.connect(self._tools_changed)
             row.addWidget(path_input, 1)
             choose = QPushButton("选择")
             choose.clicked.connect(
@@ -168,6 +189,7 @@ class CreateProjectPage(QWidget):
             form_layout.addWidget(status)
             self.tool_inputs[role] = path_input
             self.tool_status_labels[role] = status
+            self._form_controls.append(choose)
         form_layout.addStretch()
 
         content.addWidget(form_card, 5)
@@ -232,16 +254,39 @@ class CreateProjectPage(QWidget):
         self.error_banner.hide()
         page_layout.addWidget(self.error_banner)
 
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.hide()
+        page_layout.addWidget(self.progress_bar)
+
+        self.creation_status = QLabel()
+        self.creation_status.setObjectName("jsonStatus")
+        self.creation_status.setWordWrap(True)
+        self.creation_status.hide()
+        page_layout.addWidget(self.creation_status)
+
         footer = QHBoxLayout()
         footer.addStretch()
-        cancel_button = QPushButton("取消")
-        cancel_button.clicked.connect(self.cancelled)
-        footer.addWidget(cancel_button)
+        self.cancel_button = QPushButton("取消")
+        self.cancel_button.clicked.connect(self._cancel_requested)
+        footer.addWidget(self.cancel_button)
         self.create_button = QPushButton("创建项目组")
         self.create_button.setProperty("role", "primary")
         self.create_button.clicked.connect(self._create_project_group)
         footer.addWidget(self.create_button)
         page_layout.addLayout(footer)
+        self._form_controls.extend(
+            [
+                self.name_input,
+                self.count_input,
+                self.location_input,
+                self.choose_location_button,
+                self.import_button,
+                self.mapping_list,
+                *self.tool_inputs.values(),
+            ]
+        )
         self._update_json_summary()
 
     def refresh_public_tools(self) -> None:
@@ -266,6 +311,18 @@ class CreateProjectPage(QWidget):
             label.style().polish(label)
         self._update_create_state()
 
+    def _tools_changed(self) -> None:
+        self._validation_generation += 1
+        self._tool_validation_result = None
+        self._validated_binding_key = None
+        self.refresh_public_tools()
+        if self._basic_tools_ready() and not self._creation_in_progress:
+            self.creation_status.setText("正在等待验证公共工具…")
+            self.creation_status.show()
+            self._prevalidation_timer.start()
+        else:
+            self._prevalidation_timer.stop()
+
     def _choose_tool_file(self, role: str, file_filter: str) -> None:
         current = self.tool_inputs[role].text().strip()
         selected, _ = QFileDialog.getOpenFileName(
@@ -282,6 +339,76 @@ class CreateProjectPage(QWidget):
         self.tool_inputs["template"].setText(str(template))
         self.tool_inputs["validate"].setText(str(validate))
         self.refresh_public_tools()
+
+    def _binding_key(self, binding: ToolBinding | None = None) -> tuple[str, str, str] | None:
+        value = binding or self._tool_binding()
+        if value is None:
+            return None
+        return tuple(
+            os.path.normcase(str(path.expanduser().resolve()))
+            for path in (value.workflow, value.template, value.validate)
+        )
+
+    def _basic_tools_ready(self) -> bool:
+        return bool(self.tool_inputs) and all(
+            field.text().strip()
+            and Path(field.text().strip()).expanduser().is_file()
+            and Path(field.text().strip()).expanduser().stat().st_size > 0
+            for field in self.tool_inputs.values()
+        )
+
+    def _start_tool_prevalidation(self) -> None:
+        if self._tool_validation_in_progress or self._creation_in_progress:
+            return
+        binding = self._tool_binding()
+        key = self._binding_key(binding)
+        if binding is None or key is None or not self._basic_tools_ready():
+            return
+        generation = self._validation_generation
+        self._tool_validation_in_progress = True
+        self._tool_validation_result = None
+        self.creation_status.setText("正在验证工具兼容性…")
+        self.creation_status.show()
+        self.progress_bar.show()
+        self._update_create_state()
+
+        def operation(progress):
+            return self.project_service.validate_tool_binding(binding, progress)
+
+        def succeeded(result: ToolValidationResult) -> None:
+            if generation != self._validation_generation or key != self._binding_key():
+                return
+            self._tool_validation_result = result
+            self._validated_binding_key = key
+            details = [
+                "✓ workflow 可读取",
+                "✓ template 可读取",
+                "✓ validate 语法通过",
+                "✓ template 已通过 validate",
+                "✓ 三份工具可用于创建",
+            ]
+            if result.warnings:
+                details.extend(f"提示：{warning}" for warning in result.warnings)
+            self.creation_status.setText("\n".join(details))
+            for label in self.tool_status_labels.values():
+                label.setProperty("status", "normal")
+
+        def failed(exc: BaseException) -> None:
+            if generation != self._validation_generation:
+                return
+            self._tool_validation_result = None
+            self._validated_binding_key = None
+            self.creation_status.setText(f"公共工具验证未通过：{exc}")
+            self._show_error(str(exc))
+
+        def finished() -> None:
+            self._tool_validation_in_progress = False
+            self.progress_bar.hide()
+            if generation != self._validation_generation and self._basic_tools_ready():
+                self._prevalidation_timer.start()
+            self._update_create_state()
+
+        self._run_background(operation, succeeded, failed, finished)
 
     def _tool_binding(self) -> ToolBinding | None:
         values = {role: field.text().strip() for role, field in self.tool_inputs.items()}
@@ -403,13 +530,13 @@ class CreateProjectPage(QWidget):
 
     def _update_create_state(self) -> None:
         json_ready = len(self.json_files) == self.count_input.value()
-        tools_ready = bool(self.tool_inputs) and all(
-            Path(field.text().strip()).expanduser().is_file()
-            and Path(field.text().strip()).expanduser().stat().st_size > 0
-            for field in self.tool_inputs.values()
-            if field.text().strip()
-        ) and all(field.text().strip() for field in self.tool_inputs.values())
-        self.create_button.setEnabled(bool(json_ready and tools_ready))
+        tools_ready = bool(
+            self._tool_validation_result
+            and self._validated_binding_key == self._binding_key()
+        )
+        self.create_button.setEnabled(
+            bool(json_ready and tools_ready and not self._creation_in_progress)
+        )
 
     def _set_json_status(self, message: str, warning: bool = False) -> None:
         self.json_status.setText(message)
@@ -418,6 +545,8 @@ class CreateProjectPage(QWidget):
         self.json_status.style().polish(self.json_status)
 
     def _create_project_group(self) -> None:
+        if self._creation_in_progress:
+            return
         self._hide_error()
         selected = len(self.json_files)
         required = self.count_input.value()
@@ -437,34 +566,106 @@ class CreateProjectPage(QWidget):
                 "当前不会回退到内置默认文件。"
             )
             return
+        if self._tool_validation_in_progress:
+            self._show_error("正在验证公共工具，请稍候…")
+            return
+        validation_result = self._tool_validation_result
+        if validation_result is None or self._validated_binding_key != self._binding_key(tool_binding):
+            self._show_error("公共工具尚未完成验证，请稍候或重新选择文件。")
+            self._prevalidation_timer.start()
+            return
         logger.info("Project creation started; project_count=%d", required)
-        try:
-            group = self.project_service.create_project_group(
-                group_name=self.name_input.text(),
-                project_count=self.count_input.value(),
-                location=Path(self.location_input.text().strip()),
-                json_files=self.json_files,
+        self._creation_in_progress = True
+        self._set_creation_busy(True, "正在检查项目名称和 JSON 映射…")
+        group_name = self.name_input.text()
+        project_count = self.count_input.value()
+        location = Path(self.location_input.text().strip())
+        json_files = list(self.json_files)
+
+        def operation(progress):
+            return self.project_service.create_project_group(
+                group_name=group_name,
+                project_count=project_count,
+                location=location,
+                json_files=json_files,
                 tool_binding=tool_binding,
+                validation_result=validation_result,
+                progress=progress,
             )
-        except TargetExistsError as exc:
-            logger.warning("Project creation stopped because target already exists")
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("目标目录已存在")
-            box.setText(str(exc))
-            box.setInformativeText("不会覆盖任何已有内容。")
-            open_button = box.addButton("打开现有项目组", QMessageBox.ButtonRole.AcceptRole)
-            box.addButton("返回修改", QMessageBox.ButtonRole.RejectRole)
-            box.exec()
-            if box.clickedButton() is open_button:
-                self.open_existing_requested.emit(exc.path)
-            return
-        except ProjectCreationError as exc:
-            logger.exception("Project creation failed: %s", type(exc).__name__)
+
+        def succeeded(group) -> None:
+            logger.info("Project creation succeeded; project_count=%d", len(group.projects))
+            self.project_created.emit(group.root)
+
+        def failed(exc: BaseException) -> None:
+            if isinstance(exc, TargetExistsError):
+                self._show_target_exists(exc)
+                return
+            logger.error("Project creation failed: %s", type(exc).__name__, exc_info=exc)
             self._show_error(str(exc))
+
+        def finished() -> None:
+            self._creation_in_progress = False
+            self._set_creation_busy(False)
+
+        self._run_background(operation, succeeded, failed, finished)
+
+    def _show_target_exists(self, exc: TargetExistsError) -> None:
+        logger.warning("Project creation stopped because target already exists")
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("目标目录已存在")
+        box.setText(str(exc))
+        box.setInformativeText("不会覆盖任何已有内容。")
+        open_button = box.addButton("打开现有项目组", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("返回修改", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is open_button:
+            self.open_existing_requested.emit(exc.path)
+
+    def _set_creation_busy(self, busy: bool, message: str = "") -> None:
+        for control in self._form_controls:
+            control.setEnabled(not busy)
+        self.back_button.setEnabled(not busy)
+        self.cancel_button.setEnabled(not busy)
+        self.create_button.setText("正在创建…" if busy else "创建项目组")
+        self.progress_bar.setVisible(busy)
+        if busy:
+            self.creation_status.setText(message)
+            self.creation_status.show()
+        self._update_create_state()
+
+    def _cancel_requested(self) -> None:
+        if self._creation_in_progress:
+            self._show_error("项目组正在创建，请等待当前任务完成。")
             return
-        logger.info("Project creation succeeded; project_count=%d", len(group.projects))
-        self.project_created.emit(group.root)
+        self.cancelled.emit()
+
+    def _run_background(self, operation, succeeded, failed, finished) -> None:
+        thread = QThread(self)
+        worker = BackgroundWorker(operation)
+        relay = BackgroundTaskRelay(succeeded, failed, finished, self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.stage_changed.connect(self.creation_status.setText)
+        worker.succeeded.connect(relay.on_succeeded)
+        worker.failed.connect(relay.on_failed)
+        worker.finished.connect(relay.on_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._threads.add(thread)
+        self._workers.add(worker)
+        self._relays.add(relay)
+
+        def cleanup() -> None:
+            self._threads.discard(thread)
+            self._workers.discard(worker)
+            self._relays.discard(relay)
+            relay.deleteLater()
+
+        thread.finished.connect(cleanup)
+        thread.start()
 
     def _show_error(self, message: str) -> None:
         self.error_banner.setText(message)

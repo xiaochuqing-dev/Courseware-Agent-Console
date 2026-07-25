@@ -38,8 +38,10 @@ def test_create_three_projects_with_explicit_mapping(
         copied = group.root / f"项目{index}" / "原始需求" / source.name
         assert copied.read_bytes() == source.read_bytes()
         assert (group.root / f"项目{index}" / "客户反馈").is_dir()
-        assert (group.root / f"项目{index}" / "工作文件").is_dir()
-        assert (group.root / f"项目{index}" / "最终交付").is_dir()
+        assert (group.root / f"项目{index}" / "产品迭代").is_dir()
+        assert not (group.root / f"项目{index}" / "工作文件").exists()
+        assert not (group.root / f"项目{index}" / "最终交付").exists()
+        assert not (group.root / f"项目{index}" / "验收记录").exists()
         assert (group.root / f"项目{index}" / "当前任务.md").is_file()
         assert (group.root / f"项目{index}" / "项目记录.md").is_file()
 

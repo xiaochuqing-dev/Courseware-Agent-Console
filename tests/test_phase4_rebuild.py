@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QColor, QImage
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from pypdf import PdfWriter
 
@@ -91,6 +92,12 @@ def test_create_page_requires_all_three_real_tools(
     assert not page.create_button.isEnabled()
     binding = tool_binding(resource_root)
     page.set_tool_paths(binding.workflow, binding.template, binding.validate)
+    elapsed = 0
+    while page._tool_validation_result is None and elapsed < 8000:
+        app.processEvents()
+        QTest.qWait(20)
+        elapsed += 20
+    assert page._tool_validation_result is not None
     assert page.create_button.isEnabled()
     page.close()
     app.processEvents()
@@ -116,7 +123,7 @@ def test_acceptance_executes_real_validator_and_expires_after_change(
 ) -> None:
     project_service, group = create_group(tmp_path, resource_root)
     project = group.projects[0]
-    product = project.path / "工作文件" / "初始版本.html"
+    product = project.path / "产品迭代" / "初始版本.html"
     product.write_bytes((group.root / "公共工具" / "template.html").read_bytes())
     TaskService(resource_root).generate_first_build_task(project.path, "")
     acceptance = AcceptanceService(
@@ -131,6 +138,8 @@ def test_acceptance_executes_real_validator_and_expires_after_change(
     )
     assert report.json_path.is_file()
     assert report.markdown_path.is_file()
+    assert report.markdown_path == project.path / "项目记录.md"
+    assert not (project.path / "验收记录").exists()
     assert acceptance.has_current_passing_report(project.path)
     assert any(
         item.status == "warning" and item.title == "浏览器视觉检查"

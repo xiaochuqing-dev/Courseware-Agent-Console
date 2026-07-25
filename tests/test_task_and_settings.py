@@ -80,7 +80,7 @@ def test_main_window_refreshes_active_and_completed_lists_after_archive(
         "归档刷新", 3, tmp_path, sources, tool_binding(resource_root)
     )
     project3 = group.projects[2]
-    (project3.path / "工作文件" / "初始版本.html").write_text(
+    (project3.path / "产品迭代" / "初始版本.html").write_text(
         "product", encoding="utf-8"
     )
     settings = SettingsService(

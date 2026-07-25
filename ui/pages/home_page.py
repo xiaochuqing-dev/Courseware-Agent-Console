@@ -385,7 +385,10 @@ class HomePage(QWidget):
         self.open_project_button.clicked.connect(self._open_current_project)
         actions.addWidget(self.open_project_button)
 
-        self.acceptance_button = QPushButton("完整产品验收")
+        self.acceptance_button = QPushButton("完整验收（可选）")
+        self.acceptance_button.setToolTip(
+            "多轮修改或交付前使用，日常小改无需执行"
+        )
         self.acceptance_button.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
         )
@@ -595,6 +598,8 @@ class HomePage(QWidget):
     def refresh_group(self) -> None:
         if not self.group:
             return
+        if not self.group.root.is_dir():
+            return
         preferred = self.current_project.name if self.current_project else None
         pending = list(self.pending_feedback)
         try:
@@ -611,7 +616,6 @@ class HomePage(QWidget):
         if not self.current_project:
             return
         if not self.current_project.path.is_dir():
-            self.refresh_group()
             return
         self._refresh_project_state()
 

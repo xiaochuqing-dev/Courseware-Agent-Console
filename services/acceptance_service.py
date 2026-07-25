@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
-import subprocess
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
+from PySide6.QtCore import QStandardPaths
+
 from .archive_service import ArchiveService
 from .feedback_service import FeedbackService
 from .project_service import ProjectService
+from .process_utils import run_hidden_process
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,10 +59,17 @@ class AcceptanceService:
         project_service: ProjectService | None = None,
         archive_service: ArchiveService | None = None,
         feedback_service: FeedbackService | None = None,
+        state_root: Path | None = None,
     ) -> None:
         self.project_service = project_service or ProjectService()
         self.archive_service = archive_service or ArchiveService()
         self.feedback_service = feedback_service or FeedbackService()
+        if state_root is None:
+            local_data = QStandardPaths.writableLocation(
+                QStandardPaths.StandardLocation.AppLocalDataLocation
+            )
+            state_root = Path(local_data or (Path.home() / ".courseware-agent-console"))
+        self.state_root = Path(state_root) / "acceptance"
 
     def run(self, group_root: Path, project_root: Path) -> AcceptanceReport:
         group = Path(group_root).resolve()
@@ -182,8 +192,8 @@ class AcceptanceService:
                 AcceptanceItem(
                     "failed",
                     "课件成品",
-                    "工作文件中没有可验收的 HTML 课件。",
-                    str(project / "工作文件"),
+                    "产品迭代中没有可验收的 HTML 课件。",
+                    str(project / "产品迭代"),
                     "根据当前任务生成课件后重新验收。",
                 )
             )
@@ -218,14 +228,8 @@ class AcceptanceService:
         if product is not None and manifest is not None:
             validator = group / "公共工具" / self.project_service.TOOL_ROLES["validate"]
             try:
-                result = subprocess.run(
-                    ["node", str(validator), str(product)],
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    check=False,
-                    timeout=120,
+                result = run_hidden_process(
+                    ["node", str(validator), str(product)], timeout=120
                 )
                 validator_output = "\n".join(
                     part.strip()
@@ -330,11 +334,11 @@ class AcceptanceService:
         validator_output: str,
         items: tuple[AcceptanceItem, ...],
     ) -> AcceptanceReport:
-        report_root = project / "验收记录"
+        report_root = self._state_directory(project)
         report_root.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         json_path = report_root / f"验收-{stamp}.json"
-        markdown_path = report_root / f"验收-{stamp}.md"
+        markdown_path = project / "项目记录.md"
         payload = {
             "passed": passed,
             "checked_at": checked_at,
@@ -348,26 +352,23 @@ class AcceptanceService:
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-        labels = {"passed": "通过", "warning": "警告", "failed": "失败"}
+        passed_count = sum(item.status == "passed" for item in items)
+        warning_count = sum(item.status == "warning" for item in items)
+        failed_count = sum(item.status == "failed" for item in items)
         lines = [
-            "# 完整产品验收记录",
             "",
-            f"总体状态：{'通过' if passed else '未通过'}",
-            f"验收时间：{checked_at}",
-            f"项目路径：{project}",
-            f"课件文件：{product or '未找到'}",
+            "## 完整产品验收",
             "",
-            "## 检查结果",
-            "",
+            f"- 时间：{checked_at}",
+            f"- 验收产品：{product.name if product else '未找到'}",
+            f"- validate 结果：{'通过' if passed else '存在问题'}",
+            f"- 通过项：{passed_count}",
+            f"- 警告项：{warning_count}",
+            f"- 失败项：{failed_count}",
+            "- 人工视觉检查：未执行",
         ]
-        for item in items:
-            lines.extend([f"### {labels[item.status]}：{item.title}", "", item.detail])
-            if item.path:
-                lines.append(f"路径：{item.path}")
-            if item.suggestion:
-                lines.append(f"建议：{item.suggestion}")
-            lines.append("")
-        markdown_path.write_text("\n".join(lines), encoding="utf-8")
+        with markdown_path.open("a", encoding="utf-8") as handle:
+            handle.write("\n".join(lines).rstrip() + "\n")
         return AcceptanceReport(
             passed,
             checked_at,
@@ -381,7 +382,7 @@ class AcceptanceService:
         )
 
     def latest_report(self, project_root: Path) -> dict | None:
-        report_root = Path(project_root) / "验收记录"
+        report_root = self._state_directory(Path(project_root).resolve())
         reports = sorted(report_root.glob("验收-*.json")) if report_root.is_dir() else []
         if not reports:
             return None
@@ -401,3 +402,9 @@ class AcceptanceService:
             and report.get("product_sha256")
             == self.project_service.file_sha256(product)
         )
+
+    def _state_directory(self, project_root: Path) -> Path:
+        key = hashlib.sha256(
+            str(Path(project_root).resolve()).casefold().encode("utf-8")
+        ).hexdigest()
+        return self.state_root / key

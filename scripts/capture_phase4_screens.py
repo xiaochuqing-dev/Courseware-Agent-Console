@@ -93,7 +93,7 @@ def main() -> int:
             _binding(resource_root),
         )
         project = group.projects[0]
-        product = project.path / "工作文件" / "初始版本.html"
+        product = project.path / "产品迭代" / "初始版本.html"
         product.write_bytes((group.root / "公共工具" / "template.html").read_bytes())
 
         feedback = FeedbackService()

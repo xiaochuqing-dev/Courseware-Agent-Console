@@ -151,7 +151,7 @@ def main() -> int:
 
         home.requirements_input.setPlainText("保留薄荷绿视觉，并验证常用分辨率。")
         home._generate_task()
-        products3 = project3.path / "工作文件"
+        products3 = project3.path / "产品迭代"
         template_bytes = binding.template.read_bytes()
         (products3 / "初始版本.html").write_bytes(template_bytes)
         home.refresh_current_project()
@@ -256,7 +256,7 @@ def main() -> int:
 
         for project in group.projects[:2]:
             task_service.generate_first_build_task(project.path, "工作流复盘样本")
-            (project.path / "工作文件" / "初始版本.html").write_bytes(template_bytes)
+            (project.path / "产品迭代" / "初始版本.html").write_bytes(template_bytes)
             (project.path / "项目记录.md").write_text(
                 "# 项目记录\n\n## 首次制作\n\n已完成制作与验证。\n",
                 encoding="utf-8",

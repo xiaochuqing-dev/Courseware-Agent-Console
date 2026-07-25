@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QSettings, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
 from services import ProjectService, SettingsService, TaskService, ValidationError
@@ -31,6 +32,15 @@ def make_json_files(root: Path, count: int = 6) -> list[Path]:
     return paths
 
 
+def wait_until(app: QApplication, predicate, timeout_ms: int = 8000) -> None:
+    elapsed = 0
+    while not predicate() and elapsed < timeout_ms:
+        app.processEvents()
+        QTest.qWait(20)
+        elapsed += 20
+    assert predicate()
+
+
 def test_json_dialog_appends_multiple_batches_and_ignores_duplicates(
     app: QApplication,
     resource_root: Path,
@@ -41,6 +51,7 @@ def test_json_dialog_appends_multiple_batches_and_ignores_duplicates(
     page = CreateProjectPage(ProjectService(resource_root))
     binding = tool_binding(resource_root)
     page.set_tool_paths(binding.workflow, binding.template, binding.validate)
+    wait_until(app, lambda: page._tool_validation_result is not None)
     page.count_input.setValue(6)
     selections = iter(
         [
@@ -75,6 +86,7 @@ def test_json_mapping_order_delete_and_count_changes_preserve_files(
     page = CreateProjectPage(ProjectService(resource_root))
     binding = tool_binding(resource_root)
     page.set_tool_paths(binding.workflow, binding.template, binding.validate)
+    wait_until(app, lambda: page._tool_validation_result is not None)
     page.count_input.setValue(6)
     page.add_json_files(files)
 
@@ -107,6 +119,7 @@ def test_real_six_project_creation_preserves_mapping(
     page = CreateProjectPage(ProjectService(resource_root))
     binding = tool_binding(resource_root)
     page.set_tool_paths(binding.workflow, binding.template, binding.validate)
+    wait_until(app, lambda: page._tool_validation_result is not None)
     page.name_input.setText("六项目热修复验收")
     page.count_input.setValue(6)
     page.location_input.setText(str(tmp_path))
@@ -119,7 +132,7 @@ def test_real_six_project_creation_preserves_mapping(
     page.project_created.connect(created.append)
 
     page._create_project_group()
-
+    wait_until(app, lambda: bool(created))
     assert created == [tmp_path / "六项目热修复验收"]
     for index, source in enumerate(expected_mapping, start=1):
         copied_files = list(
@@ -158,6 +171,7 @@ def test_one_batch_six_and_ten_cancelled_dialogs_keep_page_usable(
     page = CreateProjectPage(ProjectService(resource_root))
     binding = tool_binding(resource_root)
     page.set_tool_paths(binding.workflow, binding.template, binding.validate)
+    wait_until(app, lambda: page._tool_validation_result is not None)
     page.count_input.setValue(6)
     page.add_json_files(files)
     monkeypatch.setattr(QFileDialog, "getOpenFileNames", lambda *args: ([], ""))
@@ -172,6 +186,7 @@ def test_one_batch_six_and_ten_cancelled_dialogs_keep_page_usable(
     created: list[Path] = []
     page.project_created.connect(created.append)
     page._create_project_group()
+    wait_until(app, lambda: bool(created))
     assert created == [tmp_path / "一次六选验收"]
     page.deleteLater()
     app.processEvents()
@@ -222,10 +237,18 @@ def test_hidden_create_page_flow_layout_does_not_cover_form_controls(
     assert all(label.geometry().height() < 100 for label in labels if label)
     assert len({label.geometry().topLeft() for label in labels if label}) == len(labels)
 
-    center = page.name_input.mapToGlobal(page.name_input.rect().center())
-    assert QApplication.widgetAt(center) is page.name_input
-    import_center = page.import_button.mapToGlobal(page.import_button.rect().center())
-    assert QApplication.widgetAt(import_center) is page.import_button
+    assert page.name_input.isVisibleTo(window)
+    assert page.name_input.visibleRegion().contains(page.name_input.rect().center())
+    input_rect = page.name_input.geometry()
+    assert all(
+        not input_rect.intersects(label.geometry())
+        for label in labels
+        if label and label.parentWidget() is page.name_input.parentWidget()
+    )
+    assert page.import_button.isVisibleTo(window)
+    assert page.import_button.visibleRegion().contains(
+        page.import_button.rect().center()
+    )
     window.close()
     app.processEvents()
 

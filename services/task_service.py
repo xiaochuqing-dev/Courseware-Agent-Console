@@ -110,7 +110,7 @@ class TaskService:
         lines.extend(
             [
                 "执行顺序：先读取 workflow，再以 template 为唯一页面起点，最后真实运行 validate。",
-                "validate 产生的 error 必须全部修复；warning 必须修复或在验收记录中说明教学理由。",
+                "validate 产生的 error 必须全部修复；warning 必须修复或在项目记录中说明教学理由。",
                 "",
             ]
         )

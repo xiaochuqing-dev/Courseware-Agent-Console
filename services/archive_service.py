@@ -23,9 +23,7 @@ class ArchiveService:
 
     @staticmethod
     def product_root(project_root: Path) -> Path:
-        project = Path(project_root)
-        current = project / "工作文件"
-        return current if current.is_dir() else project / "产品迭代"
+        return Path(project_root) / "产品迭代"
 
     def latest_product(self, project_root: Path) -> Path | None:
         products_root = self.product_root(project_root)
@@ -58,7 +56,7 @@ class ArchiveService:
             raise ArchiveError(f"项目目录不存在或已被改名：{source}")
         if self.latest_product(source) is None:
             raise NoProductVersionError(
-                f"当前项目没有可用产品版本：{source / '工作文件'}。"
+                f"当前项目没有可用产品版本：{source / '产品迭代'}。"
                 "请确认初始版本或第 N 轮修改 HTML 已保存。"
             )
         destination = self.archive_destination(group_path, project_name)

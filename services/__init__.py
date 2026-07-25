@@ -8,14 +8,20 @@ from .acceptance_service import AcceptanceItem, AcceptanceReport, AcceptanceServ
 from .feedback_service import FeedbackSaveResult, FeedbackService, PendingFeedback
 from .project_service import (
     InvalidProjectGroupError,
+    MigrationRequiredError,
+    MigrationResult,
     ProjectCreationError,
+    ProjectStructureIssue,
     ProjectService,
+    RecycleBinError,
     TargetExistsError,
     ToolBinding,
+    ToolValidationResult,
     ValidationError,
 )
 from .prompt_service import PromptService
 from .settings_service import SettingsService
+from .single_instance import SingleInstanceController
 from .task_service import TaskService
 
 __all__ = [
@@ -28,14 +34,20 @@ __all__ = [
     "FeedbackSaveResult",
     "FeedbackService",
     "InvalidProjectGroupError",
+    "MigrationRequiredError",
+    "MigrationResult",
     "NoProductVersionError",
     "PendingFeedback",
     "ProjectCreationError",
+    "ProjectStructureIssue",
     "ProjectService",
     "PromptService",
     "SettingsService",
+    "SingleInstanceController",
+    "RecycleBinError",
     "TargetExistsError",
     "ToolBinding",
+    "ToolValidationResult",
     "TaskService",
     "ValidationError",
 ]

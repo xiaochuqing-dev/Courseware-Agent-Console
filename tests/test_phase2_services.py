@@ -130,7 +130,7 @@ def test_feedback_task_allows_empty_override(phase2_group) -> None:
 def test_latest_product_uses_numeric_version_not_mtime_or_noise(phase2_group) -> None:
     _, group = phase2_group
     project = group.projects[0].path
-    products = project / "工作文件"
+    products = project / "产品迭代"
     service = ArchiveService()
     (products / "初始版本.html").write_text("initial", encoding="utf-8")
     assert service.latest_product(project).name == "初始版本.html"
@@ -148,7 +148,7 @@ def test_archive_requires_product_and_never_overwrites(phase2_group) -> None:
         service.archive_project(group.root, project1.name)
 
     project2 = group.projects[1]
-    (project2.path / "工作文件" / "初始版本.html").write_text(
+    (project2.path / "产品迭代" / "初始版本.html").write_text(
         "product", encoding="utf-8"
     )
     destination = service.archive_destination(group.root, project2.name)
@@ -168,7 +168,7 @@ def test_complete_two_round_feedback_acceptance_and_archive(phase2_group) -> Non
     tasks = TaskService(resource_root)
     archive = ArchiveService()
 
-    products = project / "工作文件"
+    products = project / "产品迭代"
     (products / "初始版本.html").write_text("initial", encoding="utf-8")
     first_image = project / "截图样本-1.png"
     second_image = project / "截图样本-2.png"
@@ -190,7 +190,7 @@ def test_complete_two_round_feedback_acceptance_and_archive(phase2_group) -> Non
 
     prompt = PromptService(resource_root, archive).product_acceptance_prompt(project)
     assert "项目“项目3”" in prompt
-    assert "工作文件/第2轮修改.html" in prompt
+    assert "产品迭代/第2轮修改.html" in prompt
     assert "不得自动把项目标记为已完成" in prompt
 
     destination = archive.archive_project(group.root, project.name)

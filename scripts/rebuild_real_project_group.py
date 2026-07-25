@@ -502,7 +502,7 @@ def main() -> int:
             project.path,
             "严格使用当前项目绑定的真实 workflow、template、validate；完成后执行完整产品验收。",
         )
-        product = project.path / "工作文件" / "初始版本.html"
+        product = project.path / "产品迭代" / "初始版本.html"
         product.write_text(
             build_courseware(template_text, requirement), encoding="utf-8"
         )
@@ -514,12 +514,12 @@ def main() -> int:
             "## 首次制作",
             "",
             f"课题：{requirement['title']}",
-            f"工作版本：工作文件/{product.name}",
+            f"产品版本：产品迭代/{product.name}",
             f"真实 workflow：{group.root / '公共工具' / 'WORKFLOW.md'}",
             f"真实 template：{group.root / '公共工具' / 'template.html'}",
             f"真实 validate：{group.root / '公共工具' / 'validate-tool.js'}",
             f"完整产品验收：{'通过' if report.passed else '未通过'}",
-            f"验收记录：{report.markdown_path}",
+            f"项目记录：{report.markdown_path}",
             "",
         ]
         (project.path / "项目记录.md").write_text(

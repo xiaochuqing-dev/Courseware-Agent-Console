@@ -26,7 +26,7 @@ def completed_group(tmp_path: Path):
     archive = ArchiveService()
     destinations: list[Path] = []
     for project in group.projects:
-        (project.path / "工作文件" / "初始版本.html").write_text(
+        (project.path / "产品迭代" / "初始版本.html").write_text(
             "product", encoding="utf-8"
         )
         destinations.append(archive.archive_project(group.root, project.name))
