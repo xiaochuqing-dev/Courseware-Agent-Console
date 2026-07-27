@@ -7,6 +7,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QBoxLayout,
     QFileDialog,
     QFormLayout,
@@ -52,6 +53,7 @@ class CreateProjectPage(QWidget):
         self.project_service = project_service
         self.json_files: list[Path] = []
         self.project_names_by_path: dict[str, str] = {}
+        self.materials_by_project: dict[str, list[Path]] = {}
         self.tool_inputs: dict[str, QLineEdit] = {}
         self.tool_status_labels: dict[str, QLabel] = {}
         self._creation_in_progress = False
@@ -205,47 +207,88 @@ class CreateProjectPage(QWidget):
         mapping_layout.setSpacing(14)
 
         mapping_title_row = QHBoxLayout()
-        mapping_title = QLabel("JSON → 项目映射")
+        mapping_title = QLabel("项目映射与首次材料")
         mapping_title.setObjectName("sectionTitle")
         mapping_title_row.addWidget(mapping_title)
         mapping_title_row.addStretch()
 
-        up_button = QPushButton()
-        up_button.setProperty("iconOnly", True)
-        up_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp))
-        up_button.setToolTip("上移所选 JSON")
-        up_button.clicked.connect(lambda: self._move_mapping(-1))
-        mapping_title_row.addWidget(up_button)
+        self.mapping_up_button = QPushButton()
+        self.mapping_up_button.setProperty("iconOnly", True)
+        self.mapping_up_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp)
+        )
+        self.mapping_up_button.setToolTip("上移所选 JSON")
+        self.mapping_up_button.clicked.connect(lambda: self._move_mapping(-1))
+        mapping_title_row.addWidget(self.mapping_up_button)
 
-        down_button = QPushButton()
-        down_button.setProperty("iconOnly", True)
-        down_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowDown))
-        down_button.setToolTip("下移所选 JSON")
-        down_button.clicked.connect(lambda: self._move_mapping(1))
-        mapping_title_row.addWidget(down_button)
+        self.mapping_down_button = QPushButton()
+        self.mapping_down_button.setProperty("iconOnly", True)
+        self.mapping_down_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowDown)
+        )
+        self.mapping_down_button.setToolTip("下移所选 JSON")
+        self.mapping_down_button.clicked.connect(lambda: self._move_mapping(1))
+        mapping_title_row.addWidget(self.mapping_down_button)
 
-        remove_button = QPushButton()
-        remove_button.setProperty("iconOnly", True)
-        remove_button.setIcon(
+        self.mapping_remove_button = QPushButton()
+        self.mapping_remove_button.setProperty("iconOnly", True)
+        self.mapping_remove_button.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
         )
-        remove_button.setToolTip("删除所选 JSON")
-        remove_button.clicked.connect(self._remove_mapping)
-        mapping_title_row.addWidget(remove_button)
-        edit_button = QPushButton("编辑名称")
-        edit_button.setToolTip("编辑所选项目名称")
-        edit_button.clicked.connect(self._edit_mapping_name)
-        mapping_title_row.addWidget(edit_button)
+        self.mapping_remove_button.setToolTip("删除所选 JSON")
+        self.mapping_remove_button.clicked.connect(self._remove_mapping)
+        mapping_title_row.addWidget(self.mapping_remove_button)
+        self.mapping_edit_button = QPushButton("编辑名称")
+        self.mapping_edit_button.setToolTip("编辑所选项目名称")
+        self.mapping_edit_button.clicked.connect(self._edit_mapping_name)
+        mapping_title_row.addWidget(self.mapping_edit_button)
         mapping_layout.addLayout(mapping_title_row)
 
-        mapping_columns = QLabel("序号  |  项目名称（最终目录）  |  原始 JSON")
+        mapping_columns = QLabel("序号  |  项目名称（最终目录）  |  材料数量  |  原始 JSON")
         mapping_columns.setObjectName("fieldLabel")
         mapping_layout.addWidget(mapping_columns)
 
         self.mapping_list = QListWidget()
         self.mapping_list.setObjectName("mappingList")
         configure_wrapped_list(self.mapping_list, minimum_height=48)
+        self.mapping_list.setMaximumHeight(160)
         mapping_layout.addWidget(self.mapping_list, 1)
+        self.mapping_list.currentRowChanged.connect(self._refresh_material_panel)
+
+        self.material_project_label = QLabel("请先选择一个项目映射")
+        self.material_project_label.setObjectName("fieldLabel")
+        self.material_project_label.setWordWrap(True)
+        mapping_layout.addWidget(self.material_project_label)
+
+        self.material_json_label = QLabel()
+        self.material_json_label.setObjectName("mutedText")
+        self.material_json_label.setWordWrap(True)
+        mapping_layout.addWidget(self.material_json_label)
+
+        self.material_list = QListWidget()
+        self.material_list.setObjectName("materialList")
+        self.material_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+        configure_wrapped_list(self.material_list, minimum_height=42)
+        self.material_list.setMinimumHeight(82)
+        self.material_list.setMaximumHeight(100)
+
+        material_buttons = QHBoxLayout()
+        self.add_material_button = QPushButton("添加图片/材料")
+        self.add_material_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
+        )
+        self.add_material_button.clicked.connect(self._choose_material_files)
+        material_buttons.addWidget(self.add_material_button)
+        self.remove_material_button = QPushButton("移除所选")
+        self.remove_material_button.clicked.connect(self._remove_selected_materials)
+        material_buttons.addWidget(self.remove_material_button)
+        self.clear_materials_button = QPushButton("清空材料")
+        self.clear_materials_button.clicked.connect(self._clear_materials)
+        material_buttons.addWidget(self.clear_materials_button)
+        mapping_layout.addLayout(material_buttons)
+        mapping_layout.addWidget(self.material_list, 1)
         content.addWidget(mapping_card, 4)
 
         scroll_content = QWidget()
@@ -295,6 +338,14 @@ class CreateProjectPage(QWidget):
                 self.choose_location_button,
                 self.import_button,
                 self.mapping_list,
+                self.mapping_up_button,
+                self.mapping_down_button,
+                self.mapping_remove_button,
+                self.mapping_edit_button,
+                self.material_list,
+                self.add_material_button,
+                self.remove_material_button,
+                self.clear_materials_button,
                 *self.tool_inputs.values(),
             ]
         )
@@ -501,6 +552,177 @@ class CreateProjectPage(QWidget):
     def _path_key(path: Path) -> str:
         return os.path.normcase(str(Path(path).expanduser().resolve()))
 
+    def _current_json_path(self) -> Path | None:
+        row = self.mapping_list.currentRow()
+        if row < 0 or row >= len(self.json_files):
+            return None
+        return self.json_files[row]
+
+    def _choose_material_files(self) -> None:
+        json_path = self._current_json_path()
+        if json_path is None:
+            self._show_error("请先选择要绑定材料的项目映射。")
+            return
+        selected, _ = QFileDialog.getOpenFileNames(
+            self,
+            "添加首次制作图片/材料",
+            "",
+            (
+                "图片 (*.png *.jpg *.jpeg *.webp *.gif *.bmp *.svg);;"
+                "文档 (*.pdf *.doc *.docx *.ppt *.pptx *.xls *.xlsx);;"
+                "文本 (*.txt *.md *.csv);;所有文件 (*)"
+            ),
+        )
+        if not selected:
+            return
+        added, ignored = self.add_material_files([Path(path) for path in selected])
+        if ignored:
+            self._set_json_status(
+                f"已添加 {added} 个材料，已忽略 {ignored} 个重复材料。",
+                warning=True,
+            )
+
+    def add_material_files(self, paths: list[Path]) -> tuple[int, int]:
+        json_path = self._current_json_path()
+        if json_path is None:
+            self._show_error("请先选择要绑定材料的项目映射。")
+            return 0, 0
+        project_key = self._path_key(json_path)
+        materials = self.materials_by_project.setdefault(project_key, [])
+        existing = {self._path_key(path) for path in materials}
+        added = 0
+        ignored = 0
+        for path in paths:
+            candidate = Path(path)
+            key = self._path_key(candidate)
+            if key in existing:
+                ignored += 1
+                continue
+            materials.append(candidate)
+            existing.add(key)
+            added += 1
+        display_name = self.project_names_by_path.get(project_key, json_path.stem)
+        logger.info(
+            "Added initial materials; project=%s; added=%d; ignored_duplicates=%d",
+            display_name,
+            added,
+            ignored,
+        )
+        self._refresh_mapping_list()
+        self.mapping_list.setCurrentRow(
+            next(
+                (
+                    index
+                    for index, path in enumerate(self.json_files)
+                    if self._path_key(path) == project_key
+                ),
+                -1,
+            )
+        )
+        self._refresh_material_panel()
+        self._hide_error()
+
+        names: dict[str, int] = {json_path.name.casefold(): 1}
+        conflicts: set[str] = set()
+        for material in materials:
+            name_key = material.name.casefold()
+            if name_key in names:
+                conflicts.add(material.name)
+            names[name_key] = names.get(name_key, 0) + 1
+        if conflicts:
+            self._show_error(
+                "材料名称冲突，将阻止创建："
+                + "、".join(sorted(conflicts, key=str.casefold))
+            )
+        return added, ignored
+
+    def _remove_selected_materials(self) -> None:
+        json_path = self._current_json_path()
+        if json_path is None:
+            self._show_error("请先选择一个项目映射。")
+            return
+        selected_rows = sorted(
+            {self.material_list.row(item) for item in self.material_list.selectedItems()},
+            reverse=True,
+        )
+        if not selected_rows:
+            self._show_error("请先选择要移除的材料。")
+            return
+        project_key = self._path_key(json_path)
+        materials = self.materials_by_project.get(project_key, [])
+        removed = 0
+        for row in selected_rows:
+            if 0 <= row < len(materials):
+                materials.pop(row)
+                removed += 1
+        logger.info(
+            "Removed initial material bindings; project=%s; count=%d",
+            self.project_names_by_path.get(project_key, json_path.stem),
+            removed,
+        )
+        self._hide_error()
+        self._refresh_mapping_list()
+        self._refresh_material_panel()
+
+    def _clear_materials(self) -> None:
+        json_path = self._current_json_path()
+        if json_path is None:
+            self._show_error("请先选择一个项目映射。")
+            return
+        project_key = self._path_key(json_path)
+        count = len(self.materials_by_project.get(project_key, []))
+        if not count:
+            return
+        self.materials_by_project[project_key] = []
+        logger.info(
+            "Cleared initial material bindings; project=%s; count=%d",
+            self.project_names_by_path.get(project_key, json_path.stem),
+            count,
+        )
+        self._hide_error()
+        self._refresh_mapping_list()
+        self._refresh_material_panel()
+
+    @staticmethod
+    def _format_file_size(size: int) -> str:
+        value = float(size)
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if value < 1024 or unit == "TB":
+                return f"{int(value):,} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+            value /= 1024
+        return f"{size:,} B"
+
+    def _refresh_material_panel(self, _row: int | None = None) -> None:
+        json_path = self._current_json_path()
+        self.material_list.clear()
+        if json_path is None:
+            self.material_project_label.setText("请先选择一个项目映射")
+            self.material_json_label.clear()
+            return
+        project_key = self._path_key(json_path)
+        display_name = self.project_names_by_path.get(project_key, json_path.stem)
+        materials = self.materials_by_project.get(project_key, [])
+        self.material_project_label.setText(
+            f"当前项目：{display_name} · 已绑定 {len(materials)} 个材料"
+        )
+        self.material_json_label.setText(f"当前 JSON：{json_path.name}")
+        for material in materials:
+            try:
+                size_text = self._format_file_size(material.stat().st_size)
+            except OSError:
+                size_text = "文件不可用"
+            item = QListWidgetItem(f"{material.name}  |  {size_text}")
+            item.setToolTip(str(material.expanduser().resolve()))
+            self.material_list.addItem(item)
+
+    def project_materials(self) -> dict[str, list[Path]]:
+        return {
+            self._path_key(path): list(
+                self.materials_by_project.get(self._path_key(path), [])
+            )
+            for path in self.json_files
+        }
+
     def _move_mapping(self, offset: int) -> None:
         row = self.mapping_list.currentRow()
         new_row = row + offset
@@ -517,27 +739,68 @@ class CreateProjectPage(QWidget):
         row = self.mapping_list.currentRow()
         if row < 0 or row >= len(self.json_files):
             return
+        json_path = self.json_files[row]
+        project_key = self._path_key(json_path)
+        material_count = len(self.materials_by_project.get(project_key, []))
+        if material_count:
+            answer = QMessageBox.question(
+                self,
+                "删除项目映射",
+                (
+                    f"项目“{self.project_names_by_path.get(project_key, json_path.stem)}”"
+                    f"当前绑定了 {material_count} 个首次制作材料。\n"
+                    "确认删除 JSON 映射并清除这些材料绑定吗？"
+                ),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            logger.info(
+                "Removed project material bindings with JSON mapping; project=%s; count=%d",
+                self.project_names_by_path.get(project_key, json_path.stem),
+                material_count,
+            )
         self.json_files.pop(row)
+        self.materials_by_project.pop(project_key, None)
+        self.project_names_by_path.pop(project_key, None)
         self._refresh_mapping_list()
         if self.json_files:
             self.mapping_list.setCurrentRow(min(row, len(self.json_files) - 1))
 
     def _refresh_mapping_list(self) -> None:
+        selected_path = self._current_json_path()
+        selected_key = self._path_key(selected_path) if selected_path else None
         self.mapping_list.clear()
         for index, path in enumerate(self.json_files, start=1):
             key = self._path_key(path)
             display_name = self.project_names_by_path.setdefault(key, path.stem)
+            material_count = len(self.materials_by_project.get(key, []))
             directory_name = self.project_service.sanitize_project_name(display_name)
             directory_hint = (
                 "" if directory_name == display_name else f"（目录：{directory_name}）"
             )
             item = QListWidgetItem(
-                f"{index}  |  {display_name}{directory_hint}  |  {path.name}"
+                f"{index}  |  {display_name}{directory_hint}"
+                f"  |  材料 {material_count} 个  |  {path.name}"
             )
             item.setToolTip(
-                f"项目名称：{display_name}\n最终目录：{directory_name}\n原始 JSON：{path}"
+                f"项目名称：{display_name}\n最终目录：{directory_name}\n"
+                f"原始 JSON：{path}\n首次材料：{material_count} 个"
             )
             self.mapping_list.addItem(item)
+        if self.json_files:
+            restored_row = next(
+                (
+                    index
+                    for index, path in enumerate(self.json_files)
+                    if self._path_key(path) == selected_key
+                ),
+                0,
+            )
+            self.mapping_list.setCurrentRow(restored_row)
+        else:
+            self._refresh_material_panel()
         self._update_json_summary()
 
     def _edit_mapping_name(self) -> None:
@@ -663,12 +926,13 @@ class CreateProjectPage(QWidget):
             return
         logger.info("Project creation started; project_count=%d", required)
         self._creation_in_progress = True
-        self._set_creation_busy(True, "正在检查项目名称和 JSON 映射…")
+        self._set_creation_busy(True, "正在验证首次制作材料…")
         group_name = self.name_input.text()
         project_count = self.count_input.value()
         location = Path(self.location_input.text().strip())
         json_files = list(self.json_files)
         project_names = self.project_names()
+        project_materials = self.project_materials()
         source_hashes = {
             self._path_key(path): self.project_service.file_sha256(path)
             for path in json_files
@@ -694,6 +958,7 @@ class CreateProjectPage(QWidget):
                 project_names=project_names,
                 source_hashes=source_hashes,
                 json_validation_complete=True,
+                project_materials=project_materials,
             )
 
         def succeeded(group) -> None:

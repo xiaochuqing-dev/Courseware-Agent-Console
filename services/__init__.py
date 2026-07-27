@@ -10,6 +10,7 @@ from .acceptance_service import AcceptanceItem, AcceptanceReport, AcceptanceServ
 from .feedback_service import FeedbackSaveResult, FeedbackService, PendingFeedback
 from .project_service import (
     InvalidProjectGroupError,
+    MaterialFileInfo,
     MigrationRequiredError,
     MigrationResult,
     ProjectCreationError,
@@ -36,6 +37,7 @@ __all__ = [
     "FeedbackSaveResult",
     "FeedbackService",
     "InvalidProjectGroupError",
+    "MaterialFileInfo",
     "MigrationRequiredError",
     "MigrationResult",
     "NoProductVersionError",

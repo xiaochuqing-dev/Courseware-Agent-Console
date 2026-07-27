@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -29,6 +30,10 @@ from .identity_service import (
 )
 from .process_utils import run_hidden_process
 from .resource_paths import bundled_resource_root
+from .app_logging import LOGGER_NAME
+
+
+logger = logging.getLogger(LOGGER_NAME)
 
 
 class ProjectCreationError(RuntimeError):
@@ -120,6 +125,14 @@ class ToolValidationResult:
             "template": self.template.as_manifest(),
             "validate": self.validate.as_manifest(),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class MaterialFileInfo:
+    source_path: Path
+    file_name: str
+    size: int
+    sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -313,6 +326,8 @@ class ProjectService:
         progress: ProgressCallback | None = None,
         project_names: list[str] | tuple[str, ...] | None = None,
         json_validation_complete: bool = False,
+        project_materials: dict[str, list[Path]] | None = None,
+        material_validation_complete: bool = False,
     ) -> Path:
         self._emit(progress, "正在检查项目名称和 JSON 映射…")
         name = group_name.strip()
@@ -370,6 +385,8 @@ class ProjectService:
                         json.load(handle)
                 except (OSError, UnicodeError, json.JSONDecodeError) as exc:
                     raise ValidationError(f"JSON 文件无法解析：{path.name}（{exc}）") from exc
+        if not material_validation_complete:
+            self.validate_project_materials(json_files, project_materials, progress)
         return target
 
     def prepare_project_names(
@@ -398,6 +415,110 @@ class ProjectService:
             raise ValidationError("项目名称必须唯一，且清洗后的目录名称也不能重复。")
         return prepared
 
+    @staticmethod
+    def path_key(path: Path) -> str:
+        return os.path.normcase(str(Path(path).expanduser().resolve()))
+
+    def validate_project_materials(
+        self,
+        json_files: list[Path] | tuple[Path, ...],
+        project_materials: dict[str, list[Path]] | None = None,
+        progress: ProgressCallback | None = None,
+    ) -> tuple[dict[str, tuple[MaterialFileInfo, ...]], int]:
+        self._emit(progress, "正在验证首次制作材料…")
+        selected_keys = {self.path_key(path): Path(path) for path in json_files}
+        normalized_materials: dict[str, list[Path]] = {}
+        for raw_key, raw_paths in (project_materials or {}).items():
+            key = self.path_key(Path(raw_key))
+            if key not in selected_keys:
+                logger.warning(
+                    "Initial material validation failed; type=unknown_project_mapping"
+                )
+                raise ValidationError("首次制作材料绑定了不在当前映射中的 JSON。")
+            if not isinstance(raw_paths, (list, tuple)):
+                logger.warning(
+                    "Initial material validation failed; type=invalid_material_list"
+                )
+                raise ValidationError("首次制作材料列表格式无效。")
+            normalized_materials.setdefault(key, []).extend(Path(path) for path in raw_paths)
+
+        result: dict[str, tuple[MaterialFileInfo, ...]] = {}
+        ignored_total = 0
+        for key, json_path in selected_keys.items():
+            seen_sources: set[str] = set()
+            seen_names: dict[str, str] = {json_path.name.casefold(): "JSON"}
+            infos: list[MaterialFileInfo] = []
+            ignored_for_project = 0
+            for source in normalized_materials.get(key, []):
+                source_key = self.path_key(source)
+                if source_key in seen_sources:
+                    ignored_total += 1
+                    ignored_for_project += 1
+                    continue
+                seen_sources.add(source_key)
+                resolved = Path(source).expanduser().resolve()
+                if not resolved.exists():
+                    logger.warning(
+                        "Initial material validation failed; type=missing_file; file=%s",
+                        resolved.name,
+                    )
+                    raise ValidationError(f"首次制作材料不存在：{resolved.name}")
+                if not resolved.is_file():
+                    logger.warning(
+                        "Initial material validation failed; type=not_regular_file; file=%s",
+                        resolved.name,
+                    )
+                    raise ValidationError(f"首次制作材料不是普通文件：{resolved.name}")
+                try:
+                    with resolved.open("rb") as handle:
+                        handle.read(1)
+                    size = resolved.stat().st_size
+                    digest = self.file_sha256(resolved)
+                except OSError as exc:
+                    logger.warning(
+                        "Initial material validation failed; type=unreadable_file; file=%s",
+                        resolved.name,
+                    )
+                    raise ValidationError(
+                        f"首次制作材料无法读取：{resolved.name}（{exc}）"
+                    ) from exc
+
+                name_key = resolved.name.casefold()
+                conflict = seen_names.get(name_key)
+                if conflict == "JSON":
+                    logger.warning(
+                        "Initial material validation failed; type=json_name_conflict; file=%s",
+                        resolved.name,
+                    )
+                    raise ValidationError(
+                        f"首次制作材料与 JSON 文件同名：{resolved.name}"
+                    )
+                if conflict is not None:
+                    logger.warning(
+                        "Initial material validation failed; type=material_name_conflict; file=%s",
+                        resolved.name,
+                    )
+                    raise ValidationError(
+                        f"同一项目存在同名首次制作材料：{resolved.name}"
+                    )
+                seen_names[name_key] = resolved.name
+                infos.append(
+                    MaterialFileInfo(
+                        source_path=resolved,
+                        file_name=resolved.name,
+                        size=size,
+                        sha256=digest,
+                    )
+                )
+            if ignored_for_project:
+                logger.info(
+                    "Ignored duplicate initial materials; project_json=%s; count=%d",
+                    json_path.name,
+                    ignored_for_project,
+                )
+            result[key] = tuple(infos)
+        return result, ignored_total
+
     def create_project_group(
         self,
         group_name: str,
@@ -410,9 +531,15 @@ class ProjectService:
         project_names: list[str] | tuple[str, ...] | None = None,
         source_hashes: dict[str, str] | None = None,
         json_validation_complete: bool = False,
+        project_materials: dict[str, list[Path]] | None = None,
     ) -> ProjectGroup:
         if validation_result is None:
             validation_result = self.validate_tool_binding(tool_binding, progress)
+        material_infos, ignored_materials = self.validate_project_materials(
+            json_files, project_materials, progress
+        )
+        if ignored_materials:
+            self._emit(progress, f"已忽略 {ignored_materials} 个重复材料。")
         target = self.validate_creation(
             group_name,
             project_count,
@@ -423,6 +550,8 @@ class ProjectService:
             progress,
             project_names,
             json_validation_complete,
+            project_materials,
+            True,
         )
         assert tool_binding is not None
         target_key = os.path.normcase(str(target.resolve()))
@@ -457,9 +586,9 @@ class ProjectService:
                 "product_directory": self.PRODUCT_DIRECTORY,
                 "projects": [],
             }
-            self._emit(progress, "正在复制公共工具和原始需求…")
+            self._emit(progress, "正在复制原始需求…")
             def create_project(arguments) -> dict[str, object]:
-                index, json_path, names = arguments
+                index, json_path, names, materials = arguments
                 display_name, directory_name = names
                 project_id = str(uuid4())
                 project_root = staging / directory_name
@@ -467,11 +596,51 @@ class ProjectService:
                 source_root.mkdir(parents=True)
                 (project_root / "客户反馈").mkdir()
                 (project_root / self.PRODUCT_DIRECTORY).mkdir()
-                shutil.copy2(json_path, source_root / Path(json_path).name)
+                json_target = source_root / Path(json_path).name
+                shutil.copy2(json_path, json_target)
+                expected_json_hash = (
+                    source_hashes.get(self.path_key(json_path), "")
+                    if source_hashes
+                    else ""
+                ) or self.file_sha256(json_path)
+                if self.file_sha256(json_target) != expected_json_hash:
+                    raise ProjectCreationError(
+                        f"原始 JSON 复制校验失败：{Path(json_path).name}"
+                    )
+
+                source_materials: list[dict[str, str | int]] = []
+                for material in materials:
+                    destination = source_root / material.file_name
+                    if destination.exists():
+                        raise ProjectCreationError(
+                            f"首次制作材料目标文件已存在：{material.file_name}"
+                        )
+                    shutil.copy2(material.source_path, destination)
+                    if (
+                        destination.stat().st_size != material.size
+                        or self.file_sha256(destination) != material.sha256
+                    ):
+                        raise ProjectCreationError(
+                            f"首次制作材料复制校验失败：{material.file_name}"
+                        )
+                    source_materials.append(
+                        {
+                            "source_id": str(uuid4()),
+                            "file_name": material.file_name,
+                            "sha256": material.sha256,
+                            "size": material.size,
+                        }
+                    )
+                logger.info(
+                    "Copied initial materials; project=%s; count=%d",
+                    display_name,
+                    len(source_materials),
+                )
                 (project_root / "当前任务.md").write_text("", encoding="utf-8")
                 (project_root / "项目记录.md").write_text(
                     "# 项目记录\n\n暂无执行记录。\n", encoding="utf-8"
                 )
+                self._emit(progress, "正在写入项目配置…")
                 project_config = {
                     "schema_version": 1,
                     "project_id": project_id,
@@ -481,15 +650,9 @@ class ProjectService:
                     "source_json": {
                         "source_id": str(uuid4()),
                         "file_name": Path(json_path).name,
-                        "sha256": (
-                            source_hashes.get(
-                                os.path.normcase(str(Path(json_path).resolve())), ""
-                            )
-                            if source_hashes
-                            else ""
-                        )
-                        or self.file_sha256(json_path),
+                        "sha256": expected_json_hash,
                     },
+                    "source_materials": source_materials,
                     "product_base_name": display_name,
                     "known_directory_names": [directory_name],
                     "artifacts": [],
@@ -503,6 +666,7 @@ class ProjectService:
                     "order": index,
                     "display_name": display_name,
                     "directory_name": directory_name,
+                    "source_material_count": len(source_materials),
                 }
 
             project_arguments = list(
@@ -510,6 +674,7 @@ class ProjectService:
                     index,
                     json_path,
                     names,
+                    material_infos.get(self.path_key(json_path), ()),
                 )
                 for index, (json_path, names) in enumerate(
                     zip(json_files, prepared_names), start=1
@@ -743,6 +908,10 @@ class ProjectService:
             raise InvalidProjectGroupError(f"项目配置无法读取：{path}（{exc}）") from exc
         if not valid_uuid(config.get("project_id")):
             raise InvalidProjectGroupError(f"项目配置缺少有效 project_id：{path}")
+        source_materials = config.get("source_materials", [])
+        if not isinstance(source_materials, list):
+            raise InvalidProjectGroupError(f"项目配置中的 source_materials 格式无效：{path}")
+        config["source_materials"] = source_materials
         return config
 
     def write_project_config(self, project_root: Path, config: dict) -> None:
@@ -979,6 +1148,7 @@ class ProjectService:
                     existing_config = None
                 if existing_config and valid_uuid(existing_config.get("project_id")):
                     config = existing_config
+                    config.setdefault("source_materials", [])
                     project_id = str(config["project_id"])
                     known_names = [
                         str(value) for value in config.get("known_directory_names", [])
@@ -1007,6 +1177,7 @@ class ProjectService:
                             "file_name": source_json.name if source_json else "",
                             "sha256": self.file_sha256(source_json) if source_json else "",
                         },
+                        "source_materials": [],
                         "product_base_name": display_name,
                         "known_directory_names": [directory_name],
                         "artifacts": [],
