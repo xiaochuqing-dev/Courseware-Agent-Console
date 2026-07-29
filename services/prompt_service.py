@@ -25,6 +25,26 @@ class PromptService:
             "{{PROJECT_NAME}}", project_name
         ).strip()
 
+    def task_execution_instruction(self, task_path: Path) -> str:
+        path = Path(task_path).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"任务文件不存在：{path}")
+        return f"请读取并完整执行以下任务文件：\n{path}"
+
+    def project_task_execution_instruction(self, project_root: Path) -> str:
+        project = Path(project_root).expanduser().resolve()
+        if not project.is_dir():
+            raise FileNotFoundError(f"项目目录不存在：{project}")
+        return self.task_execution_instruction(project / "当前任务.md")
+
+    def workflow_task_execution_instruction(self, group_root: Path) -> str:
+        group = Path(group_root).expanduser().resolve()
+        if not group.is_dir():
+            raise FileNotFoundError(f"项目组目录不存在：{group}")
+        return self.task_execution_instruction(
+            group / "工作流优化" / "当前优化任务.md"
+        )
+
     def product_acceptance_prompt(self, project_root: Path) -> str:
         project_path = Path(project_root).resolve()
         if not project_path.is_dir():

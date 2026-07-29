@@ -26,6 +26,12 @@ from .prompt_service import PromptService
 from .settings_service import SettingsService
 from .single_instance import SingleInstanceController
 from .task_service import TaskService
+from .workflow_optimization_service import (
+    WorkflowMaterialInfo,
+    WorkflowOptimizationError,
+    WorkflowOptimizationService,
+    WorkflowTaskResult,
+)
 
 __all__ = [
     "ArchiveConflictError",
@@ -55,6 +61,10 @@ __all__ = [
     "ToolValidationResult",
     "TaskService",
     "ValidationError",
+    "WorkflowMaterialInfo",
+    "WorkflowOptimizationError",
+    "WorkflowOptimizationService",
+    "WorkflowTaskResult",
     "read_courseware_meta",
     "sanitize_project_name",
 ]

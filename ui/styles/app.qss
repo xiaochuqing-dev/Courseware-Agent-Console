@@ -391,6 +391,25 @@ QListWidget#workflowProjectList {
     padding: 7px;
 }
 
+QListWidget#workflowMaterialList {
+    background: rgba(249, 253, 251, 220);
+    border: 1px solid rgba(111, 157, 144, 85);
+    border-radius: 8px;
+    padding: 6px;
+}
+
+QListWidget#workflowMaterialList::item {
+    min-height: 36px;
+    padding: 0 10px;
+    margin: 2px;
+    border-radius: 6px;
+}
+
+QListWidget#workflowMaterialList::item:selected {
+    color: #205f4d;
+    background: rgba(207, 237, 226, 220);
+}
+
 QListWidget#workflowProjectList::item {
     min-height: 44px;
     padding: 0 10px;

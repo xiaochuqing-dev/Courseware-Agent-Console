@@ -26,6 +26,7 @@ from services import (
     PromptService,
     SettingsService,
     TaskService,
+    WorkflowOptimizationService,
 )
 from services.app_logging import LOGGER_NAME
 from ui.pages import (
@@ -61,6 +62,9 @@ class MainWindow(QMainWindow):
         self.archive_service = archive_service or ArchiveService()
         self.prompt_service = prompt_service or PromptService(
             self.task_service.resource_root, self.archive_service
+        )
+        self.workflow_optimization_service = WorkflowOptimizationService(
+            self.task_service.resource_root
         )
         self.acceptance_service = acceptance_service or AcceptanceService(
             self.project_service, self.archive_service, self.feedback_service
@@ -98,7 +102,9 @@ class MainWindow(QMainWindow):
             self.project_service, self.archive_service
         )
         self.workflow_page = WorkflowOptimizationPage(
-            self.archive_service, self.prompt_service
+            self.archive_service,
+            self.prompt_service,
+            self.workflow_optimization_service,
         )
         self.page_stack.addWidget(self.home_page)
         self.page_stack.addWidget(self.create_page)

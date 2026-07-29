@@ -443,6 +443,16 @@ class HomePage(QWidget):
         self.generate_button.setProperty("role", "primary")
         self.generate_button.clicked.connect(self._generate_task)
         actions.addWidget(self.generate_button)
+        self.first_execute_button = QPushButton("复制执行指令")
+        self.first_execute_button.clicked.connect(
+            self._copy_current_task_execution_instruction
+        )
+        actions.addWidget(self.first_execute_button)
+        self.feedback_execute_button = QPushButton("复制执行指令")
+        self.feedback_execute_button.clicked.connect(
+            self._copy_current_task_execution_instruction
+        )
+        actions.addWidget(self.feedback_execute_button)
         task_layout.addLayout(actions)
         return task_card
 
@@ -612,6 +622,8 @@ class HomePage(QWidget):
             self.archive_button,
             self.open_project_button,
             self.task_preview_button,
+            self.first_execute_button,
+            self.feedback_execute_button,
             self.acceptance_button,
             self.record_button,
             self.delete_group_button,
@@ -1026,10 +1038,19 @@ class HomePage(QWidget):
         self.round_widget.setVisible(feedback_mode)
         no_rounds = self.feedback_round_combo.count() == 0
         self.feedback_task_hint.setVisible(feedback_mode and no_rounds)
+        self.first_execute_button.setVisible(not feedback_mode)
+        self.feedback_execute_button.setVisible(feedback_mode)
+        matching_task = self._task_matches_selected_mode()
+        self.first_execute_button.setEnabled(
+            not feedback_mode and matching_task and self.current_project is not None
+        )
+        self.feedback_execute_button.setEnabled(
+            feedback_mode and matching_task and self.current_project is not None
+        )
         self.generate_button.setEnabled(
             self.current_project is not None and (not feedback_mode or not no_rounds)
         )
-        if self._task_matches_selected_mode():
+        if matching_task:
             self.generate_button.setText("重新生成任务")
         elif feedback_mode:
             self.generate_button.setText("生成反馈修改任务")
@@ -1097,15 +1118,35 @@ class HomePage(QWidget):
     def _show_task_preview(self) -> None:
         if not self.current_project or not self.current_task_content.strip():
             return
-        prompt = self.prompt_service.execution_prompt(self.current_project.name)
+        try:
+            prompt = self.prompt_service.project_task_execution_instruction(
+                self.current_project.path
+            )
+        except Exception as exc:
+            self.error_requested.emit(f"无法生成执行指令：{exc}")
+            return
         self._prompt_dialog = PromptDialog(
             "当前任务预览",
             self.current_task_content,
             self,
-            "复制提示词（可选）",
+            "复制执行指令",
             copy_text=prompt,
         )
         self._prompt_dialog.exec()
+
+    def _copy_current_task_execution_instruction(self) -> None:
+        if not self.current_project or not self.current_task_content.strip():
+            self.error_requested.emit("当前模式尚未生成可执行的任务。")
+            return
+        try:
+            instruction = self.prompt_service.project_task_execution_instruction(
+                self.current_project.path
+            )
+        except Exception as exc:
+            self.error_requested.emit(f"无法复制执行指令：{exc}")
+            return
+        QGuiApplication.clipboard().setText(instruction)
+        self.toast_requested.emit("执行指令已复制")
 
     def _show_acceptance_prompt(self) -> None:
         if not self.current_project or not self.group:

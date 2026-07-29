@@ -68,9 +68,11 @@ def test_task_card_uses_compact_actions_and_separate_preview(
     dialog = home._prompt_dialog
     assert dialog is not None
     assert dialog.editor.toPlainText() == first_content
-    assert dialog.copy_button.text() == "复制提示词（可选）"
+    assert dialog.copy_button.text() == "复制执行指令"
     dialog.copy_button.click()
-    assert QGuiApplication.clipboard().text() == "执行source当前任务。"
+    assert QGuiApplication.clipboard().text() == (
+        f"请读取并完整执行以下任务文件：\n{project_root / '当前任务.md'}"
+    )
 
     home.requirements_input.setPlainText("改用第二版补充要求")
     home._generate_task()
