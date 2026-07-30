@@ -140,6 +140,27 @@ class MainWindow(QMainWindow):
         self.toast = Toast(background, self.home_page.feedback_card)
         self._restore_recent_group()
 
+    def showEvent(self, event: QEvent) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._apply_titlebar_color()
+
+    def _apply_titlebar_color(self) -> None:
+        """用 Win32 DWM API 把系统标题栏颜色改为背景图的淡绿色。"""
+        try:
+            import ctypes
+            DWMWA_CAPTION_COLOR = 35
+            # RGB(210, 245, 230) 淡薄荷绿，匹配背景图顶部色调
+            # COLORREF 格式为 0x00BBGGRR
+            color = ctypes.c_uint32(0x00E6F5D2)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                int(self.winId()),
+                DWMWA_CAPTION_COLOR,
+                ctypes.byref(color),
+                ctypes.sizeof(color),
+            )
+        except Exception:
+            pass  # 非 Windows 或 API 不可用时静默跳过
+
     @staticmethod
     def _preferred_window_size(available_size: QSize) -> QSize:
         horizontal_margin = 24

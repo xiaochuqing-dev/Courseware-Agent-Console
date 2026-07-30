@@ -246,6 +246,10 @@ QScrollArea {
     border: none;
 }
 
+QScrollArea > QWidget {
+    background: transparent;
+}
+
 QScrollArea > QWidget > QWidget {
     background: transparent;
 }
