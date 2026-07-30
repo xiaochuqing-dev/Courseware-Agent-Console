@@ -10,10 +10,10 @@ QMainWindow, QWidget#appBackground, QWidget#page {
 
 QFrame[card="true"] {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0.3,
-        stop:0 rgba(222, 255, 241, 140),
-        stop:0.5 rgba(255, 255, 255, 158),
-        stop:1 rgba(221, 246, 255, 138));
-    border: 1px solid rgba(255, 255, 255, 173);
+        stop:0 rgba(210, 245, 232, 115),
+        stop:0.5 rgba(222, 248, 240, 125),
+        stop:1 rgba(208, 242, 250, 112));
+    border: 1px solid rgba(145, 212, 190, 140);
     border-radius: 14px;
 }
 
