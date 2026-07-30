@@ -4,7 +4,7 @@ QWidget {
     font-size: 14px;
 }
 
-QMainWindow, QWidget#appBackground, QWidget#page {
+QMainWindow, QWidget#appBackground, QWidget#page, QStackedWidget {
     background: transparent;
 }
 
