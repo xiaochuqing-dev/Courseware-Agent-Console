@@ -6,6 +6,7 @@ build/
 dist/
 deployment/
 logs/
+build_log_*.txt
 *.spec
 !pysidedeploy.spec
 artifacts/

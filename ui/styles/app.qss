@@ -356,6 +356,35 @@ QFrame#pendingFeedbackRow {
     border-radius: 7px;
 }
 
+QTableWidget#batchProjectTable {
+    background: rgba(249, 253, 251, 205);
+    border: 1px solid rgba(111, 157, 144, 85);
+    border-radius: 7px;
+    gridline-color: rgba(121, 170, 155, 55);
+}
+
+QTableWidget#batchProjectTable::item {
+    padding: 7px;
+}
+
+QHeaderView::section {
+    color: #425466;
+    background: rgba(225, 243, 236, 225);
+    border: none;
+    border-bottom: 1px solid rgba(111, 157, 144, 80);
+    padding: 7px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QLabel#batchResult {
+    color: #285f50;
+    background: rgba(241, 249, 246, 220);
+    border: 1px solid rgba(103, 155, 139, 80);
+    border-radius: 7px;
+    padding: 10px 12px;
+}
+
 QLabel#acceptanceSummary {
     padding: 10px 12px;
     border: 1px solid rgba(103, 155, 139, 90);

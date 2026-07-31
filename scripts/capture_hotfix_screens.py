@@ -19,6 +19,7 @@ from services import (  # noqa: E402
     TaskService,
     ToolBinding,
 )
+from tests.helpers import tool_binding  # noqa: E402
 from ui.main_window import MainWindow  # noqa: E402
 
 
@@ -78,12 +79,7 @@ def main() -> int:
         create.count_input.setValue(6)
         create.location_input.setText(str(preview_root))
         create.location_input.setCursorPosition(0)
-        tools = ROOT / "resources" / "default_public_tools"
-        binding = ToolBinding(
-            tools / "WORKFLOW.md",
-            tools / "template.html",
-            tools / "validate-tool.js",
-        )
+        binding = tool_binding(ROOT / "resources")
         create.set_tool_paths(binding.workflow, binding.template, binding.validate)
         create.add_json_files(json_files[:3])
         app.processEvents()

@@ -29,8 +29,9 @@ def test_create_three_projects_with_explicit_mapping(
         write_json(sources / "M.json", "project-3"),
     ]
 
+    binding = tool_binding(project_service.resource_root)
     group = project_service.create_project_group(
-        "九年级", 3, tmp_path, mappings, tool_binding(project_service.resource_root)
+        "九年级", 3, tmp_path, mappings, binding
     )
 
     assert [project.name for project in group.projects] == ["Z", "A", "M"]
@@ -47,9 +48,14 @@ def test_create_three_projects_with_explicit_mapping(
         assert (project.path / "项目记录.md").is_file()
         assert (project.path / "项目配置.json").is_file()
 
+    source_tools = {
+        "WORKFLOW.md": binding.workflow,
+        "template.html": binding.template,
+        "validate-tool.js": binding.validate,
+    }
     for tool_name in project_service.REQUIRED_PUBLIC_TOOLS:
         assert (group.root / "公共工具" / tool_name).read_bytes() == (
-            project_service.public_tools_root / tool_name
+            source_tools[tool_name]
         ).read_bytes()
     assert (group.root / project_service.MANIFEST_NAME).is_file()
     assert (group.root / "AGENT任务规则.md").read_bytes() == (

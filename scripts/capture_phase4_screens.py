@@ -23,6 +23,7 @@ from services import (  # noqa: E402
     TaskService,
     ToolBinding,
 )
+from tests.helpers import tool_binding  # noqa: E402
 from ui.main_window import MainWindow  # noqa: E402
 from ui.widgets import AcceptanceDialog  # noqa: E402
 
@@ -39,12 +40,7 @@ def _save(widget: QWidget, path: Path) -> None:
 
 
 def _binding(resource_root: Path) -> ToolBinding:
-    tools = resource_root / "default_public_tools"
-    return ToolBinding(
-        tools / "WORKFLOW.md",
-        tools / "template.html",
-        tools / "validate-tool.js",
-    )
+    return tool_binding(resource_root)
 
 
 def _assert_home_layout(window: MainWindow) -> None:

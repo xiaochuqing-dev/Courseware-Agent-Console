@@ -24,6 +24,7 @@ from services import (  # noqa: E402
     TaskService,
     ToolBinding,
 )
+from tests.helpers import tool_binding  # noqa: E402
 from ui.main_window import MainWindow  # noqa: E402
 from ui.widgets import PromptDialog  # noqa: E402
 from ui.widgets.rules_editor_dialog import RulesEditorDialog  # noqa: E402
@@ -120,12 +121,7 @@ def main() -> int:
         feedback_service = FeedbackService()
         archive_service = ArchiveService()
         prompt_service = PromptService(ROOT / "resources", archive_service)
-        tools = ROOT / "resources" / "default_public_tools"
-        binding = ToolBinding(
-            tools / "WORKFLOW.md",
-            tools / "template.html",
-            tools / "validate-tool.js",
-        )
+        binding = tool_binding(ROOT / "resources")
         group = project_service.create_project_group(
             "阶段三六项目完整回归项目组", 6, preview_root, json_files, binding
         )

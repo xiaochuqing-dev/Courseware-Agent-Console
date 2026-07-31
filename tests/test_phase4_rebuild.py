@@ -172,10 +172,10 @@ def test_feedback_parser_reports_real_metadata_and_corruption(
     broken.write_bytes(b"not-a-pdf")
     with pytest.raises(ValueError, match="未加密或损坏"):
         service.pending_from_file(broken)
-    unsupported = tmp_path / "反馈.docx"
-    unsupported.write_bytes(b"docx")
-    with pytest.raises(ValueError, match="不支持"):
-        service.pending_from_file(unsupported)
+    broken_word = tmp_path / "反馈.docx"
+    broken_word.write_bytes(b"docx")
+    with pytest.raises(ValueError, match="基础结构"):
+        service.pending_from_file(broken_word)
 
 
 def test_group_registry_switch_and_console_removal_are_deterministic(

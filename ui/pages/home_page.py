@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QIODevice, Qt, Signal
+from PySide6.QtCore import QBuffer, QIODevice, QSize, Qt, Signal
 from PySide6.QtGui import QGuiApplication, QImage, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -30,6 +30,7 @@ from models import ProjectEntry, ProjectGroup
 from services import (
     AcceptanceService,
     ArchiveService,
+    BatchFeedbackService,
     FeedbackService,
     PendingFeedback,
     ProductNotice,
@@ -39,6 +40,7 @@ from services import (
 )
 from ui.widgets import (
     AcceptanceDialog,
+    BatchFeedbackPanel,
     Card,
     ElidedLabel,
     FeedbackDropArea,
@@ -48,6 +50,20 @@ from ui.widgets import (
     SidebarCard,
     configure_wrapped_list,
 )
+
+
+class CurrentPageStackedWidget(QStackedWidget):
+    def sizeHint(self) -> QSize:  # noqa: N802
+        current = self.currentWidget()
+        return current.sizeHint() if current is not None else super().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        current = self.currentWidget()
+        return current.minimumSizeHint() if current is not None else super().minimumSizeHint()
+
+    def setCurrentIndex(self, index: int) -> None:  # noqa: N802
+        super().setCurrentIndex(index)
+        self.updateGeometry()
 
 
 class HomePage(QWidget):
@@ -73,6 +89,7 @@ class HomePage(QWidget):
         archive_service: ArchiveService | None = None,
         prompt_service: PromptService | None = None,
         acceptance_service: AcceptanceService | None = None,
+        batch_feedback_service: BatchFeedbackService | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -84,6 +101,9 @@ class HomePage(QWidget):
         self.prompt_service = prompt_service or PromptService()
         self.acceptance_service = acceptance_service or AcceptanceService(
             project_service, self.archive_service, self.feedback_service
+        )
+        self.batch_feedback_service = batch_feedback_service or BatchFeedbackService(
+            project_service, self.feedback_service, task_service
         )
         self.group: ProjectGroup | None = None
         self.available_groups: tuple[Path, ...] = ()
@@ -472,10 +492,35 @@ class HomePage(QWidget):
         header.addWidget(self.latest_feedback_label)
         layout.addLayout(header)
 
+        mode_row = QHBoxLayout()
+        self.feedback_import_mode_group = QButtonGroup(self)
+        self.feedback_import_mode_group.setExclusive(True)
+        self.single_feedback_mode_button = QPushButton("当前项目反馈")
+        self.batch_feedback_mode_button = QPushButton("批量反馈")
+        for index, button in enumerate(
+            (self.single_feedback_mode_button, self.batch_feedback_mode_button)
+        ):
+            button.setCheckable(True)
+            button.setProperty("taskMode", True)
+            self.feedback_import_mode_group.addButton(button, index)
+            mode_row.addWidget(button)
+        mode_row.addStretch()
+        self.single_feedback_mode_button.setChecked(True)
+        self.feedback_import_mode_group.buttonClicked.connect(
+            self._on_feedback_import_mode_changed
+        )
+        layout.addLayout(mode_row)
+
+        self.feedback_mode_stack = CurrentPageStackedWidget()
+        self.single_feedback_page = QWidget()
+        single_layout = QVBoxLayout(self.single_feedback_page)
+        single_layout.setContentsMargins(0, 0, 0, 0)
+        single_layout.setSpacing(11)
+
         self.feedback_drop_area = FeedbackDropArea()
         self.feedback_drop_area.mime_received.connect(self._receive_mime_data)
         self.feedback_drop_area.browse_requested.connect(self._choose_feedback_files)
-        layout.addWidget(self.feedback_drop_area)
+        single_layout.addWidget(self.feedback_drop_area)
 
         pending_header = QHBoxLayout()
         pending_label = QLabel("待保存")
@@ -485,7 +530,7 @@ class HomePage(QWidget):
         self.pending_count_label.setObjectName("mutedText")
         pending_header.addWidget(self.pending_count_label)
         pending_header.addStretch()
-        layout.addLayout(pending_header)
+        single_layout.addLayout(pending_header)
 
         self.pending_scroll = QScrollArea()
         self.pending_scroll.setWidgetResizable(True)
@@ -499,7 +544,7 @@ class HomePage(QWidget):
         self.pending_layout.setContentsMargins(0, 0, 0, 0)
         self.pending_layout.setSpacing(5)
         self.pending_scroll.setWidget(self.pending_container)
-        layout.addWidget(self.pending_scroll)
+        single_layout.addWidget(self.pending_scroll)
 
         self.pending_empty_label = QLabel("粘贴或拖入的资料会先显示在这里，不会立即写入项目。")
         self.pending_empty_label.setObjectName("mutedText")
@@ -514,7 +559,7 @@ class HomePage(QWidget):
         self.new_round_button.setProperty("role", "primary")
         self.new_round_button.clicked.connect(self._save_to_new_round)
         save_actions.addWidget(self.new_round_button)
-        layout.addLayout(save_actions)
+        single_layout.addLayout(save_actions)
 
         saved_header = QHBoxLayout()
         saved_label = QLabel("已保存反馈")
@@ -524,7 +569,7 @@ class HomePage(QWidget):
         self.saved_count_label.setObjectName("mutedText")
         saved_header.addWidget(self.saved_count_label)
         saved_header.addStretch()
-        layout.addLayout(saved_header)
+        single_layout.addLayout(saved_header)
 
         self.saved_scroll = QScrollArea()
         self.saved_scroll.setWidgetResizable(True)
@@ -538,11 +583,24 @@ class HomePage(QWidget):
         self.saved_layout.setContentsMargins(0, 0, 0, 0)
         self.saved_layout.setSpacing(5)
         self.saved_scroll.setWidget(self.saved_container)
-        layout.addWidget(self.saved_scroll)
+        single_layout.addWidget(self.saved_scroll)
         self._refresh_saved_list()
+        self.feedback_mode_stack.addWidget(self.single_feedback_page)
+
+        self.batch_feedback_panel = BatchFeedbackPanel(
+            self.batch_feedback_service, self.feedback_service, self
+        )
+        self.batch_feedback_panel.error_requested.connect(self.error_requested)
+        self.batch_feedback_panel.toast_requested.connect(self.toast_requested)
+        self.batch_feedback_panel.feedback_saved.connect(self._batch_feedback_saved)
+        self.feedback_mode_stack.addWidget(self.batch_feedback_panel)
+        layout.addWidget(self.feedback_mode_stack)
         return card
 
     def set_group(self, group: ProjectGroup, preferred_project: str | None = None) -> None:
+        preserve_batch = bool(
+            self.group and self.group.root.resolve() == group.root.resolve()
+        )
         self.group = group
         self._structure_notice_key = None
         self._active_notice = None
@@ -552,6 +610,7 @@ class HomePage(QWidget):
         self.saved_feedback.clear()
         self._refresh_pending_list()
         self._refresh_saved_list()
+        self.batch_feedback_panel.set_group(group, preserve=preserve_batch)
         self._populate_group_selector()
         self.root_path_label.setText(str(group.root))
         self.root_path_label.setToolTip(str(group.root))
@@ -607,6 +666,7 @@ class HomePage(QWidget):
         self.saved_feedback.clear()
         self._refresh_pending_list()
         self._refresh_saved_list()
+        self.batch_feedback_panel.clear_group()
         self.project_list.clear()
         self._active_notice = None
         self.notice_banner.hide()
@@ -1033,6 +1093,23 @@ class HomePage(QWidget):
     def _on_task_mode_changed(self) -> None:
         self._update_task_mode_state()
 
+    def _on_feedback_import_mode_changed(self) -> None:
+        batch_mode = self.feedback_import_mode_group.checkedId() == 1
+        self.feedback_mode_stack.setCurrentIndex(1 if batch_mode else 0)
+        self.latest_feedback_label.setVisible(not batch_mode)
+        if batch_mode:
+            self.batch_feedback_panel.refresh_preview()
+
+    def _batch_feedback_saved(self) -> None:
+        if self.current_project:
+            self._refresh_project_state()
+
+    def has_unsaved_batch_feedback(self) -> bool:
+        return self.batch_feedback_panel.has_unsaved_content()
+
+    def discard_unsaved_batch_feedback(self) -> None:
+        self.batch_feedback_panel.discard_unsaved_content()
+
     def _update_task_mode_state(self) -> None:
         feedback_mode = self.task_mode_group.checkedId() == 1
         self.round_widget.setVisible(feedback_mode)
@@ -1175,7 +1252,7 @@ class HomePage(QWidget):
             self,
             "选择客户反馈文件",
             "",
-            "支持的反馈材料 (*.pdf *.txt *.png *.jpg *.jpeg)",
+            "支持的反馈材料 (*.docx *.doc *.pdf *.txt *.png *.jpg *.jpeg)",
         )
         if selected:
             self._add_feedback_files([Path(path) for path in selected])
@@ -1453,6 +1530,7 @@ class HomePage(QWidget):
         ]
         self._refresh_pending_list()
         self._refresh_project_state()
+        self.batch_feedback_panel.refresh_preview()
         if result.saved_paths:
             self.toast_requested.emit(
                 f"已保存 {len(result.saved_paths)} 项到第{round_number}轮"

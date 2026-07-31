@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QWidget  # noqa: E402
 
 from app import create_application  # noqa: E402
 from services import ProjectService, SettingsService, TaskService, ToolBinding  # noqa: E402
+from tests.helpers import tool_binding  # noqa: E402
 from ui.main_window import MainWindow  # noqa: E402
 
 
@@ -66,12 +67,7 @@ def main() -> int:
             encoding="utf-8",
         )
         resource_root = ROOT / "resources"
-        tools = resource_root / "default_public_tools"
-        binding = ToolBinding(
-            tools / "WORKFLOW.md",
-            tools / "template.html",
-            tools / "validate-tool.js",
-        )
+        binding = tool_binding(resource_root)
         project_service = ProjectService(resource_root)
         task_service = TaskService(resource_root)
         group = project_service.create_project_group(

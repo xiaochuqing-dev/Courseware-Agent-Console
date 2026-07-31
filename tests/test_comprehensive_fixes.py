@@ -290,9 +290,10 @@ def test_renamed_tool_source_files_are_warnings_and_deep_validation_is_reused(
     workflow = tools / "WORKFLOW.md"
     template = tools / "template (1).html"
     validator = tools / "validate-tool (2).js"
-    shutil.copy2(resource_root / "default_public_tools" / "WORKFLOW.md", workflow)
-    shutil.copy2(resource_root / "default_public_tools" / "template.html", template)
-    shutil.copy2(resource_root / "default_public_tools" / "validate-tool.js", validator)
+    fixture_binding = tool_binding(resource_root)
+    shutil.copy2(fixture_binding.workflow, workflow)
+    shutil.copy2(fixture_binding.template, template)
+    shutil.copy2(fixture_binding.validate, validator)
     binding = ToolBinding(workflow, template, validator)
     service = ProjectService(resource_root)
     import services.project_service as module

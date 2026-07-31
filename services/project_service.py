@@ -186,7 +186,6 @@ class ProjectService:
 
     def __init__(self, resource_root: Path | None = None) -> None:
         self.resource_root = Path(resource_root) if resource_root else bundled_resource_root()
-        self.public_tools_root = self.resource_root / "default_public_tools"
         self.prompt_templates_root = self.resource_root / "prompt_templates"
         self._validation_cache: dict[tuple[tuple[str, int, int, str], ...], ToolValidationResult] = {}
         self._cache_lock = threading.Lock()

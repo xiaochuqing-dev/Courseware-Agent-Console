@@ -44,7 +44,7 @@ class FeedbackDropArea(QFrame):
         title.setObjectName("dropTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
-        hint = QLabel("支持截图、文字、PDF、TXT、PNG、JPG、JPEG")
+        hint = QLabel("支持截图、文字、DOCX、DOC、PDF、TXT、PNG、JPG、JPEG")
         hint.setObjectName("mutedText")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(hint)

@@ -51,7 +51,6 @@ ui/
   widgets/
   styles/
 resources/
-  default_public_tools/
   prompt_templates/
 scripts/
 tests/
@@ -68,7 +67,7 @@ PHASE1_IMPLEMENTATION_REPORT.md
 - Python 模块编译通过。
 - 应用无交互启动检查通过。
 - 7 项 pytest 聚焦测试通过：三项目映射与目录结构、公共资源原样复制、数量不匹配拦截、已有目录不覆盖、打开路径准确、空特殊要求任务生成、QSettings 路径往返及窗口启动恢复。
-- validate-tool.js 对内置 template.html 的 4 项结构验证全部通过。
+- 自动化测试在系统临时目录生成公开的最小工具夹具，不随仓库分发真实 workflow、template 或 validate 文件。
 - 首页和创建项目页均完成原生 Qt 渲染截图，中文字体、渐变背景、卡片层级、控件边界和映射展示正常。
 
 ## 9. 已知限制

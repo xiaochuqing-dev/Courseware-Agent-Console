@@ -503,6 +503,29 @@ class MainWindow(QMainWindow):
         self.load_project_group(path)
 
     def _confirm_pending_feedback_before_switch(self) -> bool:
+        if self.home_page.has_unsaved_batch_feedback():
+            single_count = len(self.home_page.pending_feedback)
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("存在未保存批量反馈")
+            box.setText(
+                "当前批量反馈中有未保存材料、说明或课件提示。"
+                + (f"另有 {single_count} 项单项目反馈未保存。" if single_count else "")
+            )
+            box.setInformativeText("切换项目组会放弃以上全部待保存内容。")
+            discard_button = box.addButton(
+                "放弃并切换", QMessageBox.ButtonRole.DestructiveRole
+            )
+            cancel_button = box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+            box.setDefaultButton(cancel_button)
+            box.exec()
+            if box.clickedButton() is not discard_button:
+                return False
+            self.home_page.discard_unsaved_batch_feedback()
+            if single_count:
+                self.home_page.pending_feedback.clear()
+                self.home_page._refresh_pending_list()
+            return True
         if not self.home_page.pending_feedback:
             return True
         box = QMessageBox(self)

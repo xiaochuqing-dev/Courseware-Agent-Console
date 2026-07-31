@@ -6,11 +6,7 @@
 
 ## 1. 实际读取的公共工具
 
-workflow：C:\Users\xiaochuqing\Desktop\九年级课件\公共工具\WORKFLOW.md，SHA-256 为 D77FA04985172D9A273C61F17F6E60F36FEE3029E391CD41412AC0B3E419F521。
-
-template：C:\Users\xiaochuqing\Desktop\九年级课件\公共工具\template.html，SHA-256 为 9FD58B9F5444F5A2E293D5D721FCA6535A970C61AAE605AF373E78BE49DFAC90。
-
-validate：C:\Users\xiaochuqing\Desktop\九年级课件\公共工具\validate-tool.js，SHA-256 为 67262C18390D4AB4D4095E84C06A8B09D72A930C72AD4EA55CDDBB940F6E00D1。
+本次历史实施使用了用户在本机显式选择的 workflow、template 和 validate。出于隐私与授权边界考虑，私人文件实体、绝对来源路径和哈希均不随仓库保存或发布。
 
 ## 2. 文件解析结论
 
@@ -20,7 +16,7 @@ validate：C:\Users\xiaochuqing\Desktop\九年级课件\公共工具\validate-to
 
 名称：九年级课件-正式重建。
 
-路径：C:\Users\xiaochuqing\Desktop\九年级课件-正式重建。
+路径：本机用户选择的项目组目录。
 
 项目组配置记录了三份工具的原始路径、文件名、大小、SHA-256、复制文件名和创建时间。目录使用真实工作流约定的“工作文件”和“最终交付”。
 
@@ -28,13 +24,13 @@ validate：C:\Users\xiaochuqing\Desktop\九年级课件\公共工具\validate-to
 
 名称：九年级。
 
-路径：C:\Users\xiaochuqing\Desktop\九年级。
+路径：本机旧项目组目录。
 
 旧组包含 6 个项目和 6 份真实 JSON，但没有本轮真实工具绑定清单，因此不再作为正式结果。
 
 ## 5. 旧项目组处理结果
 
-通过 MainWindow.delete_project_group 统一删除入口选择“仅从控制台移除”。旧组已从注册列表和当前项目指向中移除，C:\Users\xiaochuqing\Desktop\九年级 本地目录仍存在，没有删除或覆盖，可作为保留副本重新导入。
+通过 MainWindow.delete_project_group 统一删除入口选择“仅从控制台移除”。旧组已从注册列表和当前项目指向中移除，本地目录仍存在，没有删除或覆盖，可作为保留副本重新导入。
 
 ## 6. workflow 的实际参与方式
 
@@ -84,9 +80,9 @@ python app.py --smoke-test：通过。Python compileall：通过。阶段一、P
 
 正式重建结果：6 个项目、6 个通过、0 个失败；每个课件 validate 均为 0 error、0 warning。
 
-Windows EXE 已于 2026-07-25 14:41 重新构建，路径为 C:\Users\xiaochuqing\Desktop\课件Agent控制台\dist\CoursewareAgentConsole.dist\CoursewareAgentConsole.exe，文件大小 27144192 字节，SHA-256 为 5E2ABE8E6AACCDAE0BD3D7F82BF37B5560F583B63370214B4DA2DED8A0E6BA0D。打包资源完整性检查和 EXE --smoke-test 均通过。
+Windows EXE 已于 2026-07-25 14:41 重新构建。打包资源完整性检查和 EXE --smoke-test 均通过；本机绝对输出路径不随报告发布。
 
-桌面快捷方式 C:\Users\xiaochuqing\Desktop\课件 Agent 控制台.lnk 已于 2026-07-25 14:41 更新，目标和工作目录均指向本次新构建目录。已通过该快捷方式实际启动并核对进程路径，验证通过后关闭测试进程。
+桌面快捷方式已于 2026-07-25 14:41 更新，目标和工作目录均指向本次新构建目录。已通过该快捷方式实际启动并核对进程路径，验证通过后关闭测试进程。
 
 ## 17. 限制和风险
 
@@ -110,4 +106,4 @@ Windows EXE 已于 2026-07-25 14:41 重新构建，路径为 C:\Users\xiaochuqin
 
 ## 22. 数据隔离与未受影响范围
 
-确认未修改 C:\Users\xiaochuqing\Desktop\九年级课件 中的原始公共工具和空项目框架，未删除 C:\Users\xiaochuqing\Desktop\九年级 及其 6 份原始 JSON。永久删除服务只允许删除用户明确确认的项目组根目录，并拒绝符号链接和范围过大的目录；自动测试确认来源 JSON 与共享工具不会被项目组删除波及。Git 发布直接提交并推送当前 main，不创建分支、PR、Tag 或 Release。
+确认未修改用户选择的原始公共工具和空项目框架，也未删除旧项目组及其原始 JSON。永久删除服务只允许删除用户明确确认的项目组根目录，并拒绝符号链接和范围过大的目录；自动测试确认来源 JSON 与共享工具不会被项目组删除波及。Git 发布直接提交并推送当前 main，不创建分支、PR、Tag 或 Release。

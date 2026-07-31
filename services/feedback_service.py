@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import hashlib
 import shutil
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -33,7 +34,8 @@ class FeedbackSaveResult:
 class FeedbackService:
     ROUND_PATTERN = re.compile(r"^第([1-9]\d*)轮$")
     IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
-    SUPPORTED_SUFFIXES = IMAGE_SUFFIXES | {".pdf", ".txt"}
+    WORD_SUFFIXES = {".docx", ".doc"}
+    SUPPORTED_SUFFIXES = IMAGE_SUFFIXES | WORD_SUFFIXES | {".pdf", ".txt"}
     MAX_FILE_SIZE = 50 * 1024 * 1024
     MAX_IMAGE_SIZE = 25 * 1024 * 1024
     MAX_TEXT_SIZE = 5 * 1024 * 1024
@@ -99,15 +101,23 @@ class FeedbackService:
     def pending_from_file(
         self, source: Path, reserved_names: set[str] | None = None
     ) -> PendingFeedback:
-        path = Path(source).resolve()
+        raw_path = Path(source).expanduser()
+        if raw_path.is_symlink():
+            raise ValueError("不支持符号链接，请选择真实反馈文件。")
+        try:
+            path = raw_path.resolve(strict=True)
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(f"文件不存在：{raw_path}") from exc
         if path.is_dir():
             raise ValueError("请拖入具体文件，不支持导入文件夹。")
         if not path.is_file():
             raise FileNotFoundError(f"文件不存在：{path}")
         suffix = path.suffix.lower()
         if suffix not in self.SUPPORTED_SUFFIXES:
+            if suffix == ".docm":
+                raise ValueError("不支持带宏的 DOCM 文件，请提供 DOCX 或 DOC 原始材料。")
             raise ValueError(
-                f"不支持 {suffix or '无扩展名'} 格式。当前支持 PDF、TXT、PNG、JPG、JPEG。"
+                f"不支持 {suffix or '无扩展名'} 格式。当前支持 DOCX、DOC、PDF、TXT、PNG、JPG、JPEG。"
             )
         size = path.stat().st_size
         if size == 0:
@@ -159,6 +169,27 @@ class FeedbackService:
                 source_path=path,
                 size_bytes=size,
                 detail=f"PDF · {pages} 页 · {self.format_size(size)}",
+                fingerprint=fingerprint,
+            )
+        if suffix == ".docx":
+            self._validate_docx(path)
+            return PendingFeedback(
+                uuid4().hex,
+                name,
+                "word",
+                source_path=path,
+                size_bytes=size,
+                detail=f"DOCX · Word 原始材料 · {self.format_size(size)}",
+                fingerprint=fingerprint,
+            )
+        if suffix == ".doc":
+            return PendingFeedback(
+                uuid4().hex,
+                name,
+                "word",
+                source_path=path,
+                size_bytes=size,
+                detail=f"DOC · 旧版 Word 原始材料 · {self.format_size(size)}",
                 fingerprint=fingerprint,
             )
         try:
@@ -321,6 +352,23 @@ class FeedbackService:
             for block in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(block)
         return digest.hexdigest().upper()
+
+    @staticmethod
+    def _validate_docx(path: Path) -> None:
+        try:
+            with zipfile.ZipFile(path) as archive:
+                names = set(archive.namelist())
+                required = {"[Content_Types].xml", "word/document.xml"}
+                if not required.issubset(names):
+                    raise ValueError("DOCX 基础结构不完整，请确认文件未损坏且扩展名正确。")
+                for member in required:
+                    archive.read(member)
+        except ValueError:
+            raise
+        except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+            raise ValueError(
+                "无法读取该 DOCX 的基础结构，请确认文件未损坏且未加密。"
+            ) from exc
 
     @staticmethod
     def format_size(size: int) -> str:
