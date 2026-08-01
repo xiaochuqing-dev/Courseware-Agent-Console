@@ -5,12 +5,11 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QIODevice, QThread, Qt, Signal
-from PySide6.QtGui import QDesktopServices, QGuiApplication, QImage, QPixmap
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QBuffer, QIODevice, QPointF, QRectF, QSize, QThread, Qt, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QComboBox,
+    QCheckBox,
     QFileDialog,
     QHeaderView,
     QHBoxLayout,
@@ -42,10 +41,67 @@ from .feedback_drop import FeedbackDropArea, PendingFeedbackRow
 from .prompt_dialog import PromptDialog
 
 
+class HighContrastCheckBox(QCheckBox):
+    """在 Windows 亮色和深色主题下都保持清晰的整格可点击复选框。"""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setToolTip("选择或取消选择此课件")
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(46, 36)
+
+    def hitButton(self, position) -> bool:  # noqa: N802
+        return self.rect().contains(position)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if not self.isEnabled():
+            painter.setOpacity(0.45)
+        side = 22.0
+        box = QRectF(
+            (self.width() - side) / 2,
+            (self.height() - side) / 2,
+            side,
+            side,
+        )
+        checked = self.isChecked()
+        fill = QColor("#087F68") if checked else QColor("#FFFFFF")
+        border = QColor("#075E54") if checked else QColor("#425466")
+        if self.hasFocus() and not checked:
+            border = QColor("#0BA878")
+        painter.setBrush(fill)
+        painter.setPen(QPen(border, 2.0))
+        painter.drawRoundedRect(box, 4.0, 4.0)
+        if checked:
+            painter.setPen(
+                QPen(
+                    QColor("#FFFFFF"),
+                    2.7,
+                    Qt.PenStyle.SolidLine,
+                    Qt.PenCapStyle.RoundCap,
+                    Qt.PenJoinStyle.RoundJoin,
+                )
+            )
+            painter.drawLine(
+                QPointF(box.left() + 5.0, box.center().y()),
+                QPointF(box.left() + 9.2, box.bottom() - 5.0),
+            )
+            painter.drawLine(
+                QPointF(box.left() + 9.2, box.bottom() - 5.0),
+                QPointF(box.right() - 4.2, box.top() + 5.0),
+            )
+
+
 class BatchFeedbackPanel(QWidget):
     error_requested = Signal(str)
     toast_requested = Signal(str)
     feedback_saved = Signal()
+    project_requested = Signal(str, int)
 
     def __init__(
         self,
@@ -68,6 +124,8 @@ class BatchFeedbackPanel(QWidget):
         self._workers: set[BackgroundWorker] = set()
         self._relays: set[BackgroundTaskRelay] = set()
         self._prompt_dialog: PromptDialog | None = None
+        self._project_checkboxes: dict[str, HighContrastCheckBox] = {}
+        self.result_project_buttons: dict[str, QPushButton] = {}
         self._build_ui()
         self._update_actions()
 
@@ -94,31 +152,23 @@ class BatchFeedbackPanel(QWidget):
         selection_header.addWidget(self.select_none_button)
         layout.addLayout(selection_header)
 
-        strategy_row = QHBoxLayout()
-        strategy_label = QLabel("轮次策略")
-        strategy_label.setObjectName("fieldLabel")
-        strategy_row.addWidget(strategy_label)
-        self.strategy_combo = QComboBox()
-        self.strategy_combo.addItem(
-            "为每个项目新建各自下一轮", BatchFeedbackService.STRATEGY_NEXT
+        self.round_rule_label = QLabel(
+            "固定规则：每个选中课件独立创建各自下一轮，不要求轮次数字一致。"
         )
-        self.strategy_combo.addItem(
-            "追加到每个项目各自最新轮次", BatchFeedbackService.STRATEGY_APPEND
-        )
-        self.strategy_combo.currentIndexChanged.connect(self._refresh_preview)
-        strategy_row.addWidget(self.strategy_combo, 1)
-        layout.addLayout(strategy_row)
+        self.round_rule_label.setObjectName("batchRoundRule")
+        self.round_rule_label.setWordWrap(True)
+        layout.addWidget(self.round_rule_label)
 
-        self.append_unavailable_label = QLabel()
-        self.append_unavailable_label.setObjectName("errorBanner")
-        self.append_unavailable_label.setWordWrap(True)
-        self.append_unavailable_label.hide()
-        layout.addWidget(self.append_unavailable_label)
+        self.preview_error_label = QLabel()
+        self.preview_error_label.setObjectName("errorBanner")
+        self.preview_error_label.setWordWrap(True)
+        self.preview_error_label.hide()
+        layout.addWidget(self.preview_error_label)
 
-        self.project_table = QTableWidget(0, 4)
+        self.project_table = QTableWidget(0, 5)
         self.project_table.setObjectName("batchProjectTable")
         self.project_table.setHorizontalHeaderLabels(
-            ["课件", "当前最新轮次", "本次目标", "本课件提示（可选）"]
+            ["选择", "课件名称", "当前最新轮次", "本次目标轮次", "本课件提示（可选）"]
         )
         self.project_table.verticalHeader().hide()
         self.project_table.setWordWrap(True)
@@ -132,13 +182,14 @@ class BatchFeedbackPanel(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         header = self.project_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        header.resizeSection(0, 58)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         self.project_table.setMinimumHeight(176)
         self.project_table.setMaximumHeight(280)
-        self.project_table.itemChanged.connect(self._project_check_changed)
         layout.addWidget(self.project_table)
 
         material_title = QLabel("统一反馈材料")
@@ -214,6 +265,12 @@ class BatchFeedbackPanel(QWidget):
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
         layout.addWidget(self.result_label)
+        self.result_projects = QWidget()
+        self.result_projects_layout = QVBoxLayout(self.result_projects)
+        self.result_projects_layout.setContentsMargins(0, 0, 0, 0)
+        self.result_projects_layout.setSpacing(6)
+        self.result_projects.hide()
+        layout.addWidget(self.result_projects)
         self._refresh_materials()
 
     def set_group(self, group: ProjectGroup, preserve: bool = False) -> None:
@@ -280,35 +337,41 @@ class BatchFeedbackPanel(QWidget):
             self.batch_note_input.clear()
             self.result_label.setText("尚未保存批量反馈。")
             self.new_batch_button.hide()
+            self._clear_result_projects()
             self._refresh_materials()
 
     def _populate_project_table(self) -> None:
         self.project_table.blockSignals(True)
         self.project_table.setRowCount(0)
+        self._project_checkboxes.clear()
         if not self.group:
             self.project_table.blockSignals(False)
             return
         for row, project in enumerate(self.group.projects):
             self.project_table.insertRow(row)
+            checkbox = HighContrastCheckBox()
+            checkbox.setAccessibleName(f"选择课件 {project.display_name}")
+            checkbox.setChecked(project.project_id in self.selected_project_ids)
+            checkbox.toggled.connect(
+                lambda selected, project_id=project.project_id: self._project_toggled(
+                    project_id, selected
+                )
+            )
+            self._project_checkboxes[project.project_id] = checkbox
+            self.project_table.setCellWidget(row, 0, checkbox)
+
             name_item = QTableWidgetItem(project.display_name)
             name_item.setToolTip(project.display_name)
             name_item.setData(Qt.ItemDataRole.UserRole, project.project_id)
-            name_item.setFlags(
-                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable
-            )
-            name_item.setCheckState(
-                Qt.CheckState.Checked
-                if project.project_id in self.selected_project_ids
-                else Qt.CheckState.Unchecked
-            )
-            self.project_table.setItem(row, 0, name_item)
+            name_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            self.project_table.setItem(row, 1, name_item)
             latest = self.feedback_service.latest_round(project.path)
             latest_item = QTableWidgetItem("无" if latest is None else f"第{latest}轮")
             latest_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.project_table.setItem(row, 1, latest_item)
-            target_item = QTableWidgetItem("未选择")
+            self.project_table.setItem(row, 2, latest_item)
+            target_item = QTableWidgetItem(f"第{(latest or 0) + 1}轮")
             target_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.project_table.setItem(row, 2, target_item)
+            self.project_table.setItem(row, 3, target_item)
             hint = QLineEdit()
             hint.setPlaceholderText("对应材料中的位置")
             hint.setText(self.project_hints.get(project.project_id, ""))
@@ -317,15 +380,14 @@ class BatchFeedbackPanel(QWidget):
                     project_id, value
                 )
             )
-            self.project_table.setCellWidget(row, 3, hint)
+            self.project_table.setCellWidget(row, 4, hint)
         self.project_table.blockSignals(False)
         self.project_table.resizeRowsToContents()
 
-    def _project_check_changed(self, item: QTableWidgetItem) -> None:
-        if item.column() != 0 or self._operation_in_progress or self.saved_result:
+    def _project_toggled(self, project_id: str, selected: bool) -> None:
+        if self._operation_in_progress or self.saved_result:
             return
-        project_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
-        if item.checkState() == Qt.CheckState.Checked:
+        if selected:
             self.selected_project_ids.add(project_id)
         else:
             self.selected_project_ids.discard(project_id)
@@ -343,14 +405,10 @@ class BatchFeedbackPanel(QWidget):
         self.selected_project_ids = (
             {project.project_id for project in self.group.projects} if selected else set()
         )
-        self.project_table.blockSignals(True)
-        for row in range(self.project_table.rowCount()):
-            item = self.project_table.item(row, 0)
-            if item:
-                item.setCheckState(
-                    Qt.CheckState.Checked if selected else Qt.CheckState.Unchecked
-                )
-        self.project_table.blockSignals(False)
+        for checkbox in self._project_checkboxes.values():
+            checkbox.blockSignals(True)
+            checkbox.setChecked(selected)
+            checkbox.blockSignals(False)
         self._refresh_preview()
 
     def _refresh_preview(self) -> None:
@@ -359,52 +417,30 @@ class BatchFeedbackPanel(QWidget):
         if self.saved_result is not None:
             self._update_actions()
             return
-        selected_latest: list[tuple[str, int | None]] = []
-        for row in range(self.project_table.rowCount()):
-            name_item = self.project_table.item(row, 0)
-            project_id = str(name_item.data(Qt.ItemDataRole.UserRole) or "")
-            latest_text = self.project_table.item(row, 1).text()
-            latest = None if latest_text == "无" else int(latest_text[1:-1])
-            if project_id in self.selected_project_ids:
-                selected_latest.append((name_item.text(), latest))
-        append_allowed = bool(selected_latest) and all(
-            latest is not None for _name, latest in selected_latest
-        )
-        append_model_item = self.strategy_combo.model().item(1)
-        if append_model_item is not None:
-            append_model_item.setEnabled(append_allowed and not self.saved_result)
-        if not append_allowed and self.strategy_combo.currentData() == BatchFeedbackService.STRATEGY_APPEND:
-            self.strategy_combo.setCurrentIndex(0)
-        no_round_names = [name for name, latest in selected_latest if latest is None]
-        if no_round_names and selected_count >= 2:
-            self.append_unavailable_label.setText(
-                "追加模式不可用：" + "、".join(no_round_names) + " 尚无反馈轮次。"
-            )
-            self.append_unavailable_label.show()
-        else:
-            self.append_unavailable_label.hide()
-
+        self.preview_error_label.hide()
         self.round_targets = ()
         if self.group and selected_count >= 2:
             try:
                 self.round_targets = self.batch_service.preview_rounds(
                     self.group.root,
                     self.selected_project_ids,
-                    str(self.strategy_combo.currentData()),
+                    BatchFeedbackService.STRATEGY_NEXT,
                 )
             except Exception as exc:
-                self.append_unavailable_label.setText(str(exc))
-                self.append_unavailable_label.show()
+                self.preview_error_label.setText(str(exc))
+                self.preview_error_label.show()
         targets_by_id = {target.project_id: target for target in self.round_targets}
         for row in range(self.project_table.rowCount()):
             project_id = str(
-                self.project_table.item(row, 0).data(Qt.ItemDataRole.UserRole) or ""
+                self.project_table.item(row, 1).data(Qt.ItemDataRole.UserRole) or ""
             )
             target = targets_by_id.get(project_id)
-            self.project_table.item(row, 2).setText(
-                target.action_text if target else "未选择"
+            latest_text = self.project_table.item(row, 2).text()
+            latest = None if latest_text == "无" else int(latest_text[1:-1])
+            self.project_table.item(row, 3).setText(
+                f"第{target.target_round if target else (latest or 0) + 1}轮"
             )
-            hint_input = self.project_table.cellWidget(row, 3)
+            hint_input = self.project_table.cellWidget(row, 4)
             if hint_input is not None:
                 hint_input.setEnabled(
                     project_id in self.selected_project_ids
@@ -636,7 +672,7 @@ class BatchFeedbackPanel(QWidget):
             return
         group_root = self.group.root
         project_ids = tuple(target.project_id for target in self.round_targets)
-        strategy = str(self.strategy_combo.currentData())
+        strategy = BatchFeedbackService.STRATEGY_NEXT
         items = tuple(self.pending_feedback)
         note = self.batch_note_input.toPlainText()
         hints = dict(self.project_hints)
@@ -683,10 +719,50 @@ class BatchFeedbackPanel(QWidget):
             ]
         )
         self.result_label.setText("\n".join(lines))
+        self._refresh_result_projects(result.targets)
         self.new_batch_button.show()
         self._refresh_materials()
         self.feedback_saved.emit()
         self.toast_requested.emit("批量反馈已全部保存")
+
+    def _clear_result_projects(self) -> None:
+        self.result_project_buttons.clear()
+        if not hasattr(self, "result_projects_layout"):
+            return
+        while self.result_projects_layout.count():
+            item = self.result_projects_layout.takeAt(0)
+            if item.widget():
+                item.widget().hide()
+                item.widget().deleteLater()
+        self.result_projects.hide()
+
+    def _refresh_result_projects(
+        self, targets: tuple[BatchRoundTarget, ...]
+    ) -> None:
+        self._clear_result_projects()
+        for target in targets:
+            row = QWidget()
+            row.setObjectName("batchResultProjectRow")
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(10, 5, 8, 5)
+            label = QLabel(
+                f"{target.display_name} → 已创建第{target.target_round}轮"
+            )
+            label.setWordWrap(True)
+            row_layout.addWidget(label, 1)
+            button = QPushButton("查看项目")
+            button.setProperty("role", "quiet")
+            button.clicked.connect(
+                lambda _checked=False,
+                project_id=target.project_id,
+                round_number=target.target_round: self.project_requested.emit(
+                    project_id, round_number
+                )
+            )
+            row_layout.addWidget(button)
+            self.result_project_buttons[target.project_id] = button
+            self.result_projects_layout.addWidget(row)
+        self.result_projects.setVisible(bool(targets))
 
     def _save_failed(self, error: object) -> None:
         if isinstance(error, BatchPlanChangedError):
@@ -755,7 +831,6 @@ class BatchFeedbackPanel(QWidget):
         self.select_all_button.setEnabled(bool(self.group) and not locked)
         self.select_none_button.setEnabled(bool(self.group) and not locked)
         self.project_table.setEnabled(bool(self.group) and not locked)
-        self.strategy_combo.setEnabled(bool(self.group) and not locked)
         self.drop_area.setEnabled(bool(self.group) and not locked)
         self.batch_note_input.setEnabled(bool(self.group) and not locked)
         self.save_button.setEnabled(

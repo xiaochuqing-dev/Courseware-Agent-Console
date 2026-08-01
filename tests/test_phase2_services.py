@@ -14,7 +14,7 @@ from services import (
     PromptService,
     TaskService,
 )
-from tests.helpers import tool_binding
+from tests.helpers import create_valid_product, tool_binding
 
 
 def write_png(path: Path, color: str = "#bfe7d8") -> Path:
@@ -116,6 +116,7 @@ def test_feedback_partial_failure_keeps_successful_files(
 def test_feedback_task_allows_empty_override(phase2_group) -> None:
     resource_root, group = phase2_group
     project = group.projects[0].path
+    create_valid_product(ProjectService(resource_root), group.projects[0])
     service = FeedbackService()
     service.save_pending(project, 1, [service.pending_from_text("修改字号")])
 
@@ -123,7 +124,7 @@ def test_feedback_task_allows_empty_override(phase2_group) -> None:
     content = task.read_text(encoding="utf-8")
     assert "任务类型：反馈修改" in content
     assert "反馈轮次：第1轮" in content
-    assert "## 特殊要求\n\n无" in content
+    assert "## 本轮特殊要求\n\n无" in content
     assert "客户反馈/第1轮/" in content
 
 

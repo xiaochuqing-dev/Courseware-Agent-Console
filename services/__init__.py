@@ -13,6 +13,7 @@ from .batch_feedback_service import (
     BatchRoundTarget,
     BatchTaskGenerationResult,
 )
+from .build_info import APP_VERSION, BuildInfo, current_build_info
 from .identity_service import read_courseware_meta, sanitize_project_name
 from .acceptance_service import AcceptanceItem, AcceptanceReport, AcceptanceService
 from .feedback_service import FeedbackSaveResult, FeedbackService, PendingFeedback
@@ -33,7 +34,13 @@ from .project_service import (
 from .prompt_service import PromptService
 from .settings_service import SettingsService
 from .single_instance import SingleInstanceController
-from .task_service import PreparedTask, TaskService
+from .task_service import (
+    BatchTaskContext,
+    PreparedTask,
+    TaskService,
+    TaskValidationResult,
+)
+from .task_types import TaskType
 from .workflow_optimization_service import (
     WorkflowMaterialInfo,
     WorkflowOptimizationError,
@@ -51,6 +58,9 @@ __all__ = [
     "BatchPlanChangedError",
     "BatchRoundTarget",
     "BatchTaskGenerationResult",
+    "BatchTaskContext",
+    "APP_VERSION",
+    "BuildInfo",
     "AcceptanceItem",
     "AcceptanceReport",
     "AcceptanceService",
@@ -75,11 +85,14 @@ __all__ = [
     "ToolBinding",
     "ToolValidationResult",
     "TaskService",
+    "TaskType",
+    "TaskValidationResult",
     "ValidationError",
     "WorkflowMaterialInfo",
     "WorkflowOptimizationError",
     "WorkflowOptimizationService",
     "WorkflowTaskResult",
+    "current_build_info",
     "read_courseware_meta",
     "sanitize_project_name",
 ]

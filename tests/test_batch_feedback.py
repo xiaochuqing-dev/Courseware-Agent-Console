@@ -15,7 +15,7 @@ from services import (
     ProjectService,
     TaskService,
 )
-from tests.helpers import tool_binding
+from tests.helpers import create_valid_product, tool_binding
 
 
 RESOURCE_ROOT = Path(__file__).resolve().parents[1] / "resources"
@@ -50,6 +50,8 @@ def batch_group(tmp_path: Path) -> tuple[ProjectService, ProjectGroup]:
         tool_binding(RESOURCE_ROOT),
         project_names=["一元二次方程", "函数 图像", "很长的勾股定理课件名称"],
     )
+    for project in group.projects:
+        create_valid_product(project_service, project)
     return project_service, group
 
 
@@ -120,21 +122,15 @@ def test_preview_calculates_each_project_round_independently(batch_group) -> Non
     assert [target.target_round for target in targets] == [1, 2, 4]
 
 
-def test_append_uses_each_latest_round_and_blocks_missing_round(batch_group) -> None:
+def test_batch_append_strategy_is_rejected(batch_group) -> None:
     project_service, group = batch_group
     add_round(group.projects[0].path, 2)
     add_round(group.projects[1].path, 4)
     service = make_service(project_service)
-    targets = service.preview_rounds(
-        group.root,
-        project_ids(group, 2),
-        BatchFeedbackService.STRATEGY_APPEND,
-    )
-    assert [target.target_round for target in targets] == [2, 4]
-    with pytest.raises(BatchFeedbackError, match="还没有反馈轮次"):
+    with pytest.raises(BatchFeedbackError, match="不支持追加历史轮次"):
         service.preview_rounds(
             group.root,
-            project_ids(group),
+            project_ids(group, 2),
             BatchFeedbackService.STRATEGY_APPEND,
         )
 
@@ -245,21 +241,25 @@ def test_different_sources_with_same_name_block_whole_batch(
     )
 
 
-def test_target_name_conflict_blocks_all_projects(batch_group, tmp_path: Path) -> None:
+def test_same_name_in_old_round_does_not_block_independent_next_round(
+    batch_group, tmp_path: Path
+) -> None:
     project_service, group = batch_group
     add_round(group.projects[0].path, 1, "统一.txt")
-    add_round(group.projects[1].path, 1, "其他.txt")
+    add_round(group.projects[1].path, 1, "统一.txt")
     source = tmp_path / "统一.txt"
     source.write_text("new", encoding="utf-8")
     item = FeedbackService().pending_from_file(source)
-    with pytest.raises(BatchFeedbackError, match="已存在同名文件"):
-        make_service(project_service).save_batch(
-            group.root,
-            project_ids(group, 2),
-            BatchFeedbackService.STRATEGY_APPEND,
-            [item],
-        )
-    assert not (group.projects[1].path / "客户反馈" / "第1轮" / "统一.txt").exists()
+    result = make_service(project_service).save_batch(
+        group.root,
+        project_ids(group, 2),
+        BatchFeedbackService.STRATEGY_NEXT,
+        [item],
+    )
+    assert [target.target_round for target in result.targets] == [2, 2]
+    for project in group.projects[:2]:
+        assert (project.path / "客户反馈" / "第1轮" / "统一.txt").is_file()
+        assert (project.path / "客户反馈" / "第2轮" / "统一.txt").is_file()
 
 
 @pytest.mark.parametrize("invalid_kind", ["missing", "directory", "symlink"])
@@ -350,8 +350,8 @@ def test_commit_failure_rolls_back_new_rounds(batch_group, tmp_path: Path, monke
     )
 
 
-def test_append_failure_keeps_all_historical_feedback(
-    batch_group, tmp_path: Path, monkeypatch
+def test_rejected_append_keeps_all_historical_feedback(
+    batch_group, tmp_path: Path
 ) -> None:
     project_service, group = batch_group
     for project in group.projects[:2]:
@@ -359,18 +359,7 @@ def test_append_failure_keeps_all_historical_feedback(
     service = make_service(project_service)
     source = tmp_path / "追加.txt"
     source.write_text("append", encoding="utf-8")
-    original = service._promote_file
-    calls = 0
-
-    def fail_second(staged: Path, destination: Path, allow_replace: bool = False) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise OSError("simulated append failure")
-        original(staged, destination, allow_replace)
-
-    monkeypatch.setattr(service, "_promote_file", fail_second)
-    with pytest.raises(BatchFeedbackError):
+    with pytest.raises(BatchFeedbackError, match="不支持追加历史轮次"):
         service.save_batch(
             group.root,
             project_ids(group, 2),
@@ -415,7 +404,7 @@ def test_batch_task_generation_uses_independent_rounds_and_paths(
     for task_path in generated.project_task_paths:
         content = task_path.read_text(encoding="utf-8")
         assert f"批次 ID：{saved.batch_id}" in content
-        assert "不得把其他课件" in content
+        assert "禁止读取、修改或引用其他项目" in content
     batch_task = generated.batch_task_path.read_text(encoding="utf-8")
     assert "本次反馈轮次：第1轮" in batch_task
     assert "本次反馈轮次：第3轮" in batch_task
@@ -455,6 +444,10 @@ def test_batch_task_generation_failure_restores_tasks_and_configs(
     with pytest.raises(BatchFeedbackError, match="恢复原任务"):
         service.generate_tasks(saved.record_path)
     assert all(path.read_bytes() == content for path, content in snapshots.items())
+    assert all(
+        not (project.path / TaskService.SNAPSHOT_NAME).exists()
+        for project in group.projects[:2]
+    )
     record = json.loads(saved.record_path.read_text(encoding="utf-8"))
     assert record["task_generation_status"] == "not_generated"
     assert not (saved.batch_directory / "批量反馈任务.md").exists()
@@ -472,6 +465,36 @@ def test_batch_execution_instruction_validates_every_project_task(
     )
     generated.project_task_paths[1].write_text("其他模式", encoding="utf-8")
     with pytest.raises(BatchFeedbackError, match="已被改写"):
+        service.batch_execution_instruction(saved.record_path)
+
+
+def test_batch_execution_instruction_expires_when_material_changes(
+    batch_group, tmp_path: Path
+) -> None:
+    project_service, group = batch_group
+    service, saved = save_two_project_batch(project_service, group, tmp_path)
+    service.generate_tasks(saved.record_path)
+    material = group.projects[0].path / "客户反馈" / "第1轮" / "任务材料.docx"
+    material.write_bytes(material.read_bytes() + b"changed")
+
+    with pytest.raises(BatchFeedbackError, match="反馈任务已失效"):
+        service.batch_execution_instruction(saved.record_path)
+
+
+def test_batch_execution_instruction_expires_when_record_changes(
+    batch_group, tmp_path: Path
+) -> None:
+    project_service, _group = batch_group
+    service, saved = save_two_project_batch(project_service, _group, tmp_path)
+    service.generate_tasks(saved.record_path)
+    record = json.loads(saved.record_path.read_text(encoding="utf-8"))
+    record["batch_note"] = "记录已被改写"
+    saved.record_path.write_text(
+        json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(BatchFeedbackError, match="记录内容已变化"):
         service.batch_execution_instruction(saved.record_path)
 
 

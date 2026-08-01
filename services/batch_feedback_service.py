@@ -16,7 +16,8 @@ from models import ProjectEntry, ProjectGroup
 
 from .feedback_service import FeedbackService, PendingFeedback
 from .project_service import ProjectService
-from .task_service import PreparedTask, TaskService
+from .task_service import BatchTaskContext, PreparedTask, TaskService
+from .task_types import TaskType
 
 
 class BatchFeedbackError(RuntimeError):
@@ -38,8 +39,7 @@ class BatchRoundTarget:
 
     @property
     def action_text(self) -> str:
-        verb = "追加到" if self.strategy == BatchFeedbackService.STRATEGY_APPEND else "新建"
-        return f"{verb}第{self.target_round}轮"
+        return f"新建第{self.target_round}轮"
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,8 +73,9 @@ ProgressCallback = Callable[[str], None]
 
 class BatchFeedbackService:
     STRATEGY_NEXT = "next"
+    # 仅用于识别旧版调用和记录；新批次不再允许追加历史轮次。
     STRATEGY_APPEND = "append"
-    STRATEGIES = {STRATEGY_NEXT, STRATEGY_APPEND}
+    STRATEGIES = {STRATEGY_NEXT}
     DIRECTORY_NAME = "批量反馈"
     RECORD_NAME = "批量反馈记录.json"
     TASK_NAME = "批量反馈任务.md"
@@ -100,18 +101,16 @@ class BatchFeedbackService:
         project_ids: Iterable[str],
         strategy: str = STRATEGY_NEXT,
     ) -> tuple[BatchRoundTarget, ...]:
-        if strategy not in self.STRATEGIES:
-            raise ValueError(f"未知批量反馈轮次策略：{strategy}")
+        if strategy != self.STRATEGY_NEXT:
+            raise BatchFeedbackError(
+                "批量反馈固定为每个项目独立创建下一轮，不支持追加历史轮次。"
+            )
         group = self.project_service.load_project_group(Path(group_root))
         selected = self._selected_projects(group, project_ids)
         targets: list[BatchRoundTarget] = []
-        without_rounds: list[str] = []
         for project in selected:
             latest = self.feedback_service.latest_round(project.path)
-            if strategy == self.STRATEGY_APPEND and latest is None:
-                without_rounds.append(project.display_name)
-                continue
-            target = latest if strategy == self.STRATEGY_APPEND else (latest or 0) + 1
+            target = (latest or 0) + 1
             targets.append(
                 BatchRoundTarget(
                     project_id=project.project_id,
@@ -121,11 +120,6 @@ class BatchFeedbackService:
                     target_round=int(target),
                     strategy=strategy,
                 )
-            )
-        if without_rounds:
-            names = "、".join(without_rounds)
-            raise BatchFeedbackError(
-                f"追加模式不可用，以下课件还没有反馈轮次：{names}"
             )
         return tuple(targets)
 
@@ -174,6 +168,9 @@ class BatchFeedbackService:
         record_file, record = self._load_record(record_path)
         if record.get("task_generation_status") != "success":
             raise BatchFeedbackError("批量反馈任务尚未全部生成。")
+        current_context_hash = self.task_service.batch_record_context_sha256(record)
+        if current_context_hash != str(record.get("feedback_context_sha256", "")):
+            raise BatchFeedbackError("批量反馈记录内容已变化，当前批量任务已失效。")
         task_path = Path(str(record.get("batch_task_path", ""))).resolve()
         if not task_path.is_file():
             raise FileNotFoundError(f"批量反馈任务文件不存在：{task_path}")
@@ -192,19 +189,34 @@ class BatchFeedbackService:
                     f"{target.get('display_name', task.parent.name)} 的当前任务已被改写，"
                     "批量任务已失效。"
                 )
-            try:
-                content = task.read_text(encoding="utf-8")
-            except (OSError, UnicodeError) as exc:
-                raise BatchFeedbackError(f"无法读取项目当前任务：{task}") from exc
-            markers = (
-                f"项目 ID：{target.get('project_id', '')}",
-                f"反馈轮次：第{int(target.get('target_round', 0))}轮",
-                f"批次 ID：{record.get('batch_id', '')}",
-            )
-            if any(marker not in content for marker in markers):
+            snapshot = Path(str(target.get("task_snapshot_path", ""))).resolve()
+            expected_snapshot_hash = str(target.get("task_snapshot_sha256", ""))
+            if (
+                not snapshot.is_file()
+                or not expected_snapshot_hash
+                or self._file_sha256(snapshot) != expected_snapshot_hash
+            ):
                 raise BatchFeedbackError(
-                    f"{target.get('display_name', task.parent.name)} 的当前任务与本批次不匹配。"
+                    f"{target.get('display_name', task.parent.name)} 的任务快照已变化，"
+                    "批量任务已失效。"
                 )
+            project_path = Path(str(target.get("project_path", ""))).resolve()
+            if task.parent != project_path:
+                raise BatchFeedbackError("项目任务路径与批次记录不一致。")
+            try:
+                self.task_service.require_valid_current_task(
+                    project_path,
+                    expected_task_type=TaskType.FEEDBACK_MODIFICATION,
+                    expected_round=int(target.get("target_round", 0)),
+                    expected_special_requirements=str(
+                        target.get("project_hint", "")
+                    ),
+                    expected_batch_id=str(record.get("batch_id", "")),
+                )
+            except Exception as exc:
+                raise BatchFeedbackError(
+                    f"{target.get('display_name', task.parent.name)} 的反馈任务已失效：{exc}"
+                ) from exc
         if record_file.parent != task_path.parent:
             raise BatchFeedbackError("批次记录与批量任务文件不在同一目录。")
         return f"请读取并完整执行以下批量任务文件：\n\n{task_path}"
@@ -317,11 +329,13 @@ class BatchFeedbackService:
                         "task_generation_status": "not_generated",
                         "task_path": "",
                         "task_sha256": "",
+                        "task_snapshot_path": "",
+                        "task_snapshot_sha256": "",
                     }
                 )
 
             record = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "batch_id": batch_identifier,
                 "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
                 "group_id": group.group_id,
@@ -343,6 +357,9 @@ class BatchFeedbackService:
                 "batch_task_path": "",
                 "batch_task_sha256": "",
             }
+            record["feedback_context_sha256"] = (
+                self.task_service.batch_record_context_sha256(record)
+            )
             (staging_root / self.RECORD_NAME).write_text(
                 json.dumps(record, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
@@ -350,15 +367,8 @@ class BatchFeedbackService:
 
             self._emit(progress, "正在提交各课件反馈轮次…")
             for target, project_stage, target_round in staged_projects:
-                if strategy == self.STRATEGY_NEXT:
-                    self._promote_new_round(project_stage, target_round)
-                    promotions.append(("directory", target_round))
-                else:
-                    for staged_file in tuple(project_stage.iterdir()):
-                        destination = target_round / staged_file.name
-                        self._promote_file(staged_file, destination)
-                        promotions.append(("file", destination))
-                    project_stage.rmdir()
+                self._promote_new_round(project_stage, target_round)
+                promotions.append(("directory", target_round))
             if projects_stage.exists():
                 projects_stage.rmdir()
             staging_root.replace(final_batch_dir)
@@ -388,6 +398,10 @@ class BatchFeedbackService:
         record_file, record = self._load_record(record_path)
         if record.get("feedback_save_status") != "success":
             raise BatchFeedbackError("批量反馈尚未完整保存，不能生成任务。")
+        if self.task_service.batch_record_context_sha256(record) != str(
+            record.get("feedback_context_sha256", "")
+        ):
+            raise BatchFeedbackError("批量反馈记录内容已变化，不能生成过期任务。")
         if record.get("task_generation_status") == "success":
             if self.is_batch_instruction_valid(record_file):
                 return BatchTaskGenerationResult(
@@ -437,14 +451,12 @@ class BatchFeedbackService:
                     raise BatchFeedbackError(
                         f"{project.display_name} 的批量反馈材料缺失：{saved_path}"
                     )
-            hint = str(target.get("project_hint", "")).strip() or "无"
-            requirements = (
-                f"批次 ID：{batch_id}\n"
-                f"本项目批量反馈提示：{hint}\n"
-                "只处理当前课件能够明确归属的反馈；不得猜测，也不得把其他课件的要求应用到当前项目。"
-            )
+            hint = str(target.get("project_hint", "")).strip()
             prepared = self.task_service.prepare_feedback_task(
-                project.path, round_number, requirements
+                project.path,
+                round_number,
+                hint,
+                batch_context=BatchTaskContext(record_file),
             )
             prepared_tasks.append((target, prepared))
 
@@ -462,10 +474,7 @@ class BatchFeedbackService:
         try:
             self._emit(progress, "正在暂存并校验所有项目任务…")
             for _target, prepared in prepared_tasks:
-                for destination, content in (
-                    (prepared.config_path, prepared.config_content),
-                    (prepared.task_path, prepared.task_content),
-                ):
+                for destination, content in prepared.outputs():
                     temporary = destination.parent / (
                         f".{destination.name}.batch-{batch_id}-{uuid4().hex[:6]}"
                     )
@@ -485,6 +494,10 @@ class BatchFeedbackService:
                 target["task_generation_status"] = "success"
                 target["task_path"] = str(prepared.task_path.resolve())
                 target["task_sha256"] = staged_hashes[prepared.task_path]
+                target["task_snapshot_path"] = str(prepared.snapshot_path.resolve())
+                target["task_snapshot_sha256"] = staged_hashes[
+                    prepared.snapshot_path
+                ]
             record["task_generation_status"] = "success"
             record["batch_task_path"] = str(batch_task_path.resolve())
             record["batch_task_sha256"] = batch_task_hash
@@ -499,6 +512,19 @@ class BatchFeedbackService:
                 promoted.append(destination)
             self._promote_file(staged_batch_task, batch_task_path)
             promoted.append(batch_task_path)
+            for target, prepared in prepared_tasks:
+                validation = self.task_service.validate_current_task(
+                    prepared.project_root,
+                    expected_task_type=TaskType.FEEDBACK_MODIFICATION,
+                    expected_round=prepared.feedback_round,
+                    expected_special_requirements=prepared.special_requirements,
+                    expected_batch_id=batch_id,
+                )
+                if not validation.valid:
+                    raise BatchFeedbackError(
+                        f"{target.get('display_name', prepared.project_root.name)} "
+                        f"任务写入后校验失败：{validation.reason}"
+                    )
             self._promote_file(staged_record, record_file, allow_replace=True)
             promoted.append(record_file)
         except Exception as exc:

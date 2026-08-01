@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .archive_service import ArchiveService
 from .resource_paths import bundled_resource_root
+from .task_types import TaskType
+
+if TYPE_CHECKING:
+    from .task_service import TaskService
 
 
 class PromptService:
@@ -11,6 +16,7 @@ class PromptService:
         self,
         resource_root: Path | None = None,
         archive_service: ArchiveService | None = None,
+        task_service: TaskService | None = None,
     ) -> None:
         self.resource_root = (
             Path(resource_root)
@@ -19,6 +25,7 @@ class PromptService:
         )
         self.templates_root = self.resource_root / "prompt_templates"
         self.archive_service = archive_service or ArchiveService()
+        self.task_service = task_service
 
     def execution_prompt(self, project_name: str) -> str:
         return self._read_template("short_execute_prompt.txt").replace(
@@ -31,10 +38,29 @@ class PromptService:
             raise FileNotFoundError(f"任务文件不存在：{path}")
         return f"请读取并完整执行以下任务文件：\n{path}"
 
-    def project_task_execution_instruction(self, project_root: Path) -> str:
+    def project_task_execution_instruction(
+        self,
+        project_root: Path,
+        expected_task_type: TaskType | None = None,
+        expected_round: int | None = None,
+        expected_special_requirements: str | None = None,
+        expected_batch_id: str | None = None,
+    ) -> str:
         project = Path(project_root).expanduser().resolve()
         if not project.is_dir():
             raise FileNotFoundError(f"项目目录不存在：{project}")
+        validator = self.task_service
+        if validator is None:
+            from .task_service import TaskService
+
+            validator = TaskService(self.resource_root)
+        validator.require_valid_current_task(
+            project,
+            expected_task_type=expected_task_type,
+            expected_round=expected_round,
+            expected_special_requirements=expected_special_requirements,
+            expected_batch_id=expected_batch_id,
+        )
         return self.task_execution_instruction(project / "当前任务.md")
 
     def workflow_task_execution_instruction(self, group_root: Path) -> str:

@@ -47,6 +47,7 @@ class FeedbackDropArea(QFrame):
         hint = QLabel("支持截图、文字、DOCX、DOC、PDF、TXT、PNG、JPG、JPEG")
         hint.setObjectName("mutedText")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setWordWrap(True)
         layout.addWidget(hint)
 
         self.browse_button = QPushButton("选择文件")

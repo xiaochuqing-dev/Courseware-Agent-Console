@@ -15,7 +15,7 @@ from services import (
     sanitize_project_name,
 )
 from services.identity_service import write_courseware_meta
-from tests.helpers import tool_binding
+from tests.helpers import create_valid_product, tool_binding
 
 
 RESOURCE_ROOT = Path(__file__).resolve().parents[1] / "resources"
@@ -106,8 +106,12 @@ def test_tasks_allocate_artifact_and_use_readable_product_names(tmp_path: Path) 
     config = service.read_project_config(project.path)
     assert len(config["artifacts"]) == 1
     assert UUID(config["artifacts"][0]["artifact_id"])
+    create_valid_product(service, project)
 
     (project.path / "客户反馈" / "第2轮").mkdir()
+    (project.path / "客户反馈" / "第2轮" / "反馈.txt").write_text(
+        "调整内容", encoding="utf-8"
+    )
     feedback = tasks.generate_feedback_task(project.path, 2, "")
     feedback_text = feedback.read_text(encoding="utf-8")
     assert "预期输出：产品迭代/正负球模型（有理数加法）（2）.html" in feedback_text

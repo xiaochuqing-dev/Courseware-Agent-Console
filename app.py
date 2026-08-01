@@ -10,7 +10,7 @@ from PySide6.QtGui import QFont, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication
 
 from ui.main_window import MainWindow
-from services import SettingsService, SingleInstanceController
+from services import APP_VERSION, SettingsService, SingleInstanceController
 from services.app_logging import LOGGER_NAME, configure_logging
 from services.resource_paths import bundled_resource_root
 
@@ -26,7 +26,7 @@ def create_application(argv: list[str] | None = None) -> QApplication:
     )
     app = QApplication(argv if argv is not None else sys.argv)
     app.setApplicationName("课件 Agent 控制台")
-    app.setApplicationVersion("1.0.0")
+    app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName("CoursewareTools")
     app.setStyle("Fusion")
     app.setFont(QFont("Microsoft YaHei UI", 10))

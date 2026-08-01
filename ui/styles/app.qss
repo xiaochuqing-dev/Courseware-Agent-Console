@@ -385,6 +385,27 @@ QLabel#batchResult {
     padding: 10px 12px;
 }
 
+QLabel#batchRoundRule {
+    color: #205f4d;
+    background: rgba(225, 245, 237, 225);
+    border: 1px solid rgba(70, 145, 123, 90);
+    border-radius: 7px;
+    padding: 9px 12px;
+    font-weight: 600;
+}
+
+QWidget#batchResultProjectRow {
+    background: rgba(249, 253, 251, 220);
+    border: 1px solid rgba(103, 155, 139, 70);
+    border-radius: 7px;
+}
+
+QTableWidget#batchProjectTable QLineEdit:disabled {
+    color: #6D7B77;
+    background: rgba(239, 245, 242, 210);
+    border-color: rgba(121, 157, 146, 65);
+}
+
 QLabel#acceptanceSummary {
     padding: 10px 12px;
     border: 1px solid rgba(103, 155, 139, 90);

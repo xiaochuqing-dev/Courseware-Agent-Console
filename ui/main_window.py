@@ -30,6 +30,7 @@ from services import (
 )
 from services.app_logging import LOGGER_NAME
 from ui.pages import (
+    BatchFeedbackPage,
     CompletedProjectsPage,
     CreateProjectPage,
     HomePage,
@@ -61,7 +62,9 @@ class MainWindow(QMainWindow):
         self.feedback_service = feedback_service or FeedbackService()
         self.archive_service = archive_service or ArchiveService()
         self.prompt_service = prompt_service or PromptService(
-            self.task_service.resource_root, self.archive_service
+            self.task_service.resource_root,
+            self.archive_service,
+            self.task_service,
         )
         self.workflow_optimization_service = WorkflowOptimizationService(
             self.task_service.resource_root
@@ -97,6 +100,11 @@ class MainWindow(QMainWindow):
             self.prompt_service,
             self.acceptance_service,
         )
+        self.batch_feedback_page = BatchFeedbackPage(
+            self.project_service,
+            self.task_service,
+            self.feedback_service,
+        )
         self.create_page = CreateProjectPage(self.project_service)
         self.completed_page = CompletedProjectsPage(
             self.project_service, self.archive_service
@@ -107,6 +115,7 @@ class MainWindow(QMainWindow):
             self.workflow_optimization_service,
         )
         self.page_stack.addWidget(self.home_page)
+        self.page_stack.addWidget(self.batch_feedback_page)
         self.page_stack.addWidget(self.create_page)
         self.page_stack.addWidget(self.completed_page)
         self.page_stack.addWidget(self.workflow_page)
@@ -119,6 +128,7 @@ class MainWindow(QMainWindow):
         self.home_page.workflow_optimization_requested.connect(
             self.show_workflow_optimization
         )
+        self.home_page.batch_feedback_requested.connect(self.show_batch_feedback)
         self.home_page.toast_requested.connect(self.show_toast)
         self.home_page.structure_notice_requested.connect(
             self._handle_structure_notice
@@ -136,6 +146,15 @@ class MainWindow(QMainWindow):
         self.workflow_page.back_requested.connect(self.show_home_page)
         self.workflow_page.error_requested.connect(self.show_error)
         self.workflow_page.toast_requested.connect(self.show_toast)
+        self.batch_feedback_page.back_requested.connect(self.show_home_page)
+        self.batch_feedback_page.error_requested.connect(self.show_error)
+        self.batch_feedback_page.toast_requested.connect(self.show_toast)
+        self.batch_feedback_page.feedback_saved.connect(
+            self.home_page.refresh_group
+        )
+        self.batch_feedback_page.project_requested.connect(
+            self._show_project_feedback_round
+        )
 
         self.toast = Toast(background, self.home_page.feedback_card)
         self._restore_recent_group()
@@ -195,6 +214,28 @@ class MainWindow(QMainWindow):
         self.workflow_page.set_context(self.home_page.group.root)
         self.page_stack.setCurrentWidget(self.workflow_page)
         logger.info("Page switch: workflow optimization")
+
+    def show_batch_feedback(self) -> None:
+        if not self.home_page.group:
+            return
+        current = self.batch_feedback_page.group
+        preserve = bool(
+            current
+            and current.root.resolve() == self.home_page.group.root.resolve()
+        )
+        self.batch_feedback_page.set_group(
+            self.home_page.group,
+            preserve=preserve,
+        )
+        self.page_stack.setCurrentWidget(self.batch_feedback_page)
+        logger.info("Page switch: batch feedback")
+
+    def _show_project_feedback_round(
+        self, project_id: str, round_number: int
+    ) -> None:
+        self.show_home_page()
+        if not self.home_page.select_project_feedback_round(project_id, round_number):
+            self.show_error("无法定位批量反馈对应的项目或反馈轮次。")
 
     def choose_project_group(self) -> None:
         start = self.settings_service.recent_group_path()
@@ -265,6 +306,7 @@ class MainWindow(QMainWindow):
             self.settings_service.registered_group_paths()
         )
         self.home_page.set_group(group, preferred_project)
+        self.batch_feedback_page.set_group(group, preserve=False)
         self.completed_page.set_context(group.root)
         self.workflow_page.set_context(group.root)
         logger.info("Project group loaded; project_count=%d", len(group.projects))
@@ -477,6 +519,7 @@ class MainWindow(QMainWindow):
         if not candidates:
             logger.info("No recent project group to restore")
             self.home_page.set_empty_state()
+            self.batch_feedback_page.clear_group()
             if missing:
                 self.show_toast(
                     f"已移除 {len(missing)} 个不存在的项目组记录。",
@@ -498,12 +541,13 @@ class MainWindow(QMainWindow):
         logger.warning("No registered project group could be restored")
         self.settings_service.clear_recent_group_path()
         self.home_page.set_empty_state("未找到可读取的项目组，可以创建或重新选择。")
+        self.batch_feedback_page.clear_group()
 
     def _switch_project_group(self, path: Path) -> None:
         self.load_project_group(path)
 
     def _confirm_pending_feedback_before_switch(self) -> bool:
-        if self.home_page.has_unsaved_batch_feedback():
+        if self.batch_feedback_page.has_unsaved_content():
             single_count = len(self.home_page.pending_feedback)
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Icon.Warning)
@@ -521,7 +565,7 @@ class MainWindow(QMainWindow):
             box.exec()
             if box.clickedButton() is not discard_button:
                 return False
-            self.home_page.discard_unsaved_batch_feedback()
+            self.batch_feedback_page.discard_unsaved_content()
             if single_count:
                 self.home_page.pending_feedback.clear()
                 self.home_page._refresh_pending_list()
@@ -654,11 +698,13 @@ class MainWindow(QMainWindow):
                 self.home_page.set_empty_state(
                     "剩余项目组需要迁移或修复，请稍后从下拉列表中主动选择。"
                 )
+                self.batch_feedback_page.clear_group()
                 self.show_home_page()
         else:
             self.settings_service.clear_recent_group_path()
             self.home_page.set_available_groups(())
             self.home_page.set_empty_state("暂无项目组，请创建或导入项目组。")
+            self.batch_feedback_page.clear_group()
             self.show_home_page()
         self.show_toast(
             f"已{'移到回收站并' if recycled else ''}从控制台移除 {root.name}"

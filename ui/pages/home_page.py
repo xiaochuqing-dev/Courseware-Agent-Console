@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QIODevice, QSize, Qt, Signal
+from PySide6.QtCore import QBuffer, QIODevice, Qt, Signal
 from PySide6.QtGui import QGuiApplication, QImage, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -30,17 +30,18 @@ from models import ProjectEntry, ProjectGroup
 from services import (
     AcceptanceService,
     ArchiveService,
-    BatchFeedbackService,
     FeedbackService,
     PendingFeedback,
     ProductNotice,
     ProjectService,
     PromptService,
     TaskService,
+    TaskType,
+    TaskValidationResult,
+    current_build_info,
 )
 from ui.widgets import (
     AcceptanceDialog,
-    BatchFeedbackPanel,
     Card,
     ElidedLabel,
     FeedbackDropArea,
@@ -52,20 +53,6 @@ from ui.widgets import (
 )
 
 
-class CurrentPageStackedWidget(QStackedWidget):
-    def sizeHint(self) -> QSize:  # noqa: N802
-        current = self.currentWidget()
-        return current.sizeHint() if current is not None else super().sizeHint()
-
-    def minimumSizeHint(self) -> QSize:  # noqa: N802
-        current = self.currentWidget()
-        return current.minimumSizeHint() if current is not None else super().minimumSizeHint()
-
-    def setCurrentIndex(self, index: int) -> None:  # noqa: N802
-        super().setCurrentIndex(index)
-        self.updateGeometry()
-
-
 class HomePage(QWidget):
     create_project_requested = Signal()
     choose_group_requested = Signal()
@@ -73,6 +60,7 @@ class HomePage(QWidget):
     archive_requested = Signal()
     completed_projects_requested = Signal()
     workflow_optimization_requested = Signal()
+    batch_feedback_requested = Signal()
     toast_requested = Signal(str)
     structure_notice_requested = Signal(object, str, str)
     error_requested = Signal(str)
@@ -89,7 +77,6 @@ class HomePage(QWidget):
         archive_service: ArchiveService | None = None,
         prompt_service: PromptService | None = None,
         acceptance_service: AcceptanceService | None = None,
-        batch_feedback_service: BatchFeedbackService | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -98,12 +85,13 @@ class HomePage(QWidget):
         self.task_service = task_service
         self.feedback_service = feedback_service or FeedbackService()
         self.archive_service = archive_service or ArchiveService()
-        self.prompt_service = prompt_service or PromptService()
+        self.prompt_service = prompt_service or PromptService(
+            self.task_service.resource_root,
+            self.archive_service,
+            self.task_service,
+        )
         self.acceptance_service = acceptance_service or AcceptanceService(
             project_service, self.archive_service, self.feedback_service
-        )
-        self.batch_feedback_service = batch_feedback_service or BatchFeedbackService(
-            project_service, self.feedback_service, task_service
         )
         self.group: ProjectGroup | None = None
         self.available_groups: tuple[Path, ...] = ()
@@ -111,6 +99,7 @@ class HomePage(QWidget):
         self.pending_feedback: list[PendingFeedback] = []
         self.saved_feedback: list[PendingFeedback] = []
         self.current_task_content = ""
+        self.current_task_validation = TaskValidationResult(False, False)
         self._prompt_dialog: PromptDialog | None = None
         self._acceptance_dialog: AcceptanceDialog | None = None
         self._structure_notice_key: str | None = None
@@ -133,8 +122,13 @@ class HomePage(QWidget):
         brand = QLabel("课件 Agent 控制台")
         brand.setObjectName("sectionTitle")
         sidebar_layout.addWidget(brand)
-        version_label = QLabel("v1.0.0")
+        version_label = QLabel(current_build_info().display_text)
         version_label.setObjectName("versionText")
+        version_label.setToolTip(
+            f"版本 {current_build_info().version}\n"
+            f"提交 {current_build_info().commit_sha or '开发模式'}\n"
+            f"构建日期 {current_build_info().build_date}"
+        )
         sidebar_layout.addWidget(version_label)
 
         create_button = QPushButton("创建项目")
@@ -154,6 +148,13 @@ class HomePage(QWidget):
         configure_wrapped_list(self.project_list)
         self.project_list.currentItemChanged.connect(self._on_project_selected)
         sidebar_layout.addWidget(self.project_list, 1)
+
+        self.batch_feedback_button = QPushButton("批量反馈")
+        self.batch_feedback_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView)
+        )
+        self.batch_feedback_button.clicked.connect(self.batch_feedback_requested)
+        sidebar_layout.addWidget(self.batch_feedback_button)
 
         self.workflow_button = QPushButton("工作流优化")
         self.workflow_button.setIcon(
@@ -360,37 +361,21 @@ class HomePage(QWidget):
         self.task_mode_group.setExclusive(True)
         self.first_build_button = QPushButton("首次制作")
         self.feedback_task_button = QPushButton("反馈修改")
-        for index, button in enumerate(
-            (self.first_build_button, self.feedback_task_button)
-        ):
+        for button in (self.first_build_button, self.feedback_task_button):
             button.setCheckable(True)
             button.setProperty("taskMode", True)
-            self.task_mode_group.addButton(button, index)
+            self.task_mode_group.addButton(button)
             mode_row.addWidget(button)
         self.first_build_button.setChecked(True)
         self.task_mode_group.buttonClicked.connect(self._on_task_mode_changed)
         mode_column.addLayout(mode_row)
         details_row.addLayout(mode_column)
 
-        self.round_widget = QWidget()
-        round_layout = QVBoxLayout(self.round_widget)
-        round_layout.setContentsMargins(0, 0, 0, 0)
-        round_label = QLabel("反馈轮次")
-        round_label.setObjectName("fieldLabel")
-        round_layout.addWidget(round_label)
-        self.feedback_round_combo = QComboBox()
-        self.feedback_round_combo.setMinimumWidth(130)
-        self.feedback_round_combo.currentIndexChanged.connect(
-            self._update_task_mode_state
-        )
-        round_layout.addWidget(self.feedback_round_combo)
-        details_row.addWidget(self.round_widget)
         details_row.addStretch(1)
         self.tools_binding_label = QLabel("工具绑定：未检查")
         self.tools_binding_label.setObjectName("toolBindingStatus")
         self.tools_binding_label.setWordWrap(True)
         details_row.addWidget(self.tools_binding_label)
-        self.round_widget.hide()
         task_layout.addLayout(details_row)
 
         task_body = QHBoxLayout()
@@ -404,6 +389,7 @@ class HomePage(QWidget):
         self.requirements_input.setMinimumHeight(62)
         self.requirements_input.setMaximumHeight(76)
         self.requirements_input.setMaximumWidth(760)
+        self.requirements_input.textChanged.connect(self._update_task_mode_state)
         requirements_column.addWidget(self.requirements_input)
         task_body.addLayout(requirements_column, 3)
 
@@ -483,44 +469,64 @@ class HomePage(QWidget):
         layout.setSpacing(11)
 
         header = QHBoxLayout()
-        title = QLabel("客户反馈导入")
+        title = QLabel("当前项目反馈")
         title.setObjectName("sectionTitle")
         header.addWidget(title)
         header.addStretch()
-        self.latest_feedback_label = QLabel("尚无反馈轮次")
+        self.latest_feedback_label = QLabel("当前共 0 轮")
         self.latest_feedback_label.setObjectName("mutedText")
         header.addWidget(self.latest_feedback_label)
         layout.addLayout(header)
 
-        mode_row = QHBoxLayout()
-        self.feedback_import_mode_group = QButtonGroup(self)
-        self.feedback_import_mode_group.setExclusive(True)
-        self.single_feedback_mode_button = QPushButton("当前项目反馈")
-        self.batch_feedback_mode_button = QPushButton("批量反馈")
-        for index, button in enumerate(
-            (self.single_feedback_mode_button, self.batch_feedback_mode_button)
-        ):
-            button.setCheckable(True)
-            button.setProperty("taskMode", True)
-            self.feedback_import_mode_group.addButton(button, index)
-            mode_row.addWidget(button)
-        mode_row.addStretch()
-        self.single_feedback_mode_button.setChecked(True)
-        self.feedback_import_mode_group.buttonClicked.connect(
-            self._on_feedback_import_mode_changed
+        round_row = QHBoxLayout()
+        round_label = QLabel("反馈轮次")
+        round_label.setObjectName("fieldLabel")
+        round_row.addWidget(round_label)
+        self.feedback_round_combo = QComboBox()
+        self.feedback_round_combo.setMinimumWidth(150)
+        self.feedback_round_combo.currentIndexChanged.connect(
+            self._on_feedback_round_changed
         )
-        layout.addLayout(mode_row)
+        round_row.addWidget(self.feedback_round_combo)
+        self.selected_round_hint = QLabel("项目尚无反馈")
+        self.selected_round_hint.setObjectName("mutedText")
+        round_row.addWidget(self.selected_round_hint)
+        round_row.addStretch()
+        layout.addLayout(round_row)
 
-        self.feedback_mode_stack = CurrentPageStackedWidget()
-        self.single_feedback_page = QWidget()
-        single_layout = QVBoxLayout(self.single_feedback_page)
-        single_layout.setContentsMargins(0, 0, 0, 0)
-        single_layout.setSpacing(11)
+        saved_header = QHBoxLayout()
+        saved_label = QLabel("当前选中轮次材料")
+        saved_label.setObjectName("fieldLabel")
+        saved_header.addWidget(saved_label)
+        self.saved_count_label = QLabel("0 项")
+        self.saved_count_label.setObjectName("mutedText")
+        saved_header.addWidget(self.saved_count_label)
+        saved_header.addStretch()
+        layout.addLayout(saved_header)
+
+        self.saved_scroll = QScrollArea()
+        self.saved_scroll.setWidgetResizable(True)
+        self.saved_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.saved_scroll.setMinimumHeight(64)
+        self.saved_scroll.setMaximumHeight(172)
+        self.saved_container = QWidget()
+        self.saved_layout = QVBoxLayout(self.saved_container)
+        self.saved_layout.setContentsMargins(0, 0, 0, 0)
+        self.saved_layout.setSpacing(5)
+        self.saved_scroll.setWidget(self.saved_container)
+        layout.addWidget(self.saved_scroll)
+        self._refresh_saved_list()
+
+        import_label = QLabel("添加本次反馈材料")
+        import_label.setObjectName("fieldLabel")
+        layout.addWidget(import_label)
 
         self.feedback_drop_area = FeedbackDropArea()
         self.feedback_drop_area.mime_received.connect(self._receive_mime_data)
         self.feedback_drop_area.browse_requested.connect(self._choose_feedback_files)
-        single_layout.addWidget(self.feedback_drop_area)
+        layout.addWidget(self.feedback_drop_area)
 
         pending_header = QHBoxLayout()
         pending_label = QLabel("待保存")
@@ -530,7 +536,7 @@ class HomePage(QWidget):
         self.pending_count_label.setObjectName("mutedText")
         pending_header.addWidget(self.pending_count_label)
         pending_header.addStretch()
-        single_layout.addLayout(pending_header)
+        layout.addLayout(pending_header)
 
         self.pending_scroll = QScrollArea()
         self.pending_scroll.setWidgetResizable(True)
@@ -544,7 +550,7 @@ class HomePage(QWidget):
         self.pending_layout.setContentsMargins(0, 0, 0, 0)
         self.pending_layout.setSpacing(5)
         self.pending_scroll.setWidget(self.pending_container)
-        single_layout.addWidget(self.pending_scroll)
+        layout.addWidget(self.pending_scroll)
 
         self.pending_empty_label = QLabel("粘贴或拖入的资料会先显示在这里，不会立即写入项目。")
         self.pending_empty_label.setObjectName("mutedText")
@@ -553,54 +559,16 @@ class HomePage(QWidget):
         save_actions = QHBoxLayout()
         save_actions.addStretch()
         self.append_round_button = QPushButton()
-        self.append_round_button.clicked.connect(self._append_to_latest_round)
+        self.append_round_button.clicked.connect(self._append_to_selected_round)
         save_actions.addWidget(self.append_round_button)
         self.new_round_button = QPushButton()
         self.new_round_button.setProperty("role", "primary")
         self.new_round_button.clicked.connect(self._save_to_new_round)
         save_actions.addWidget(self.new_round_button)
-        single_layout.addLayout(save_actions)
-
-        saved_header = QHBoxLayout()
-        saved_label = QLabel("已保存反馈")
-        saved_label.setObjectName("fieldLabel")
-        saved_header.addWidget(saved_label)
-        self.saved_count_label = QLabel("0 项")
-        self.saved_count_label.setObjectName("mutedText")
-        saved_header.addWidget(self.saved_count_label)
-        saved_header.addStretch()
-        single_layout.addLayout(saved_header)
-
-        self.saved_scroll = QScrollArea()
-        self.saved_scroll.setWidgetResizable(True)
-        self.saved_scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
-        self.saved_scroll.setMinimumHeight(54)
-        self.saved_scroll.setMaximumHeight(152)
-        self.saved_container = QWidget()
-        self.saved_layout = QVBoxLayout(self.saved_container)
-        self.saved_layout.setContentsMargins(0, 0, 0, 0)
-        self.saved_layout.setSpacing(5)
-        self.saved_scroll.setWidget(self.saved_container)
-        single_layout.addWidget(self.saved_scroll)
-        self._refresh_saved_list()
-        self.feedback_mode_stack.addWidget(self.single_feedback_page)
-
-        self.batch_feedback_panel = BatchFeedbackPanel(
-            self.batch_feedback_service, self.feedback_service, self
-        )
-        self.batch_feedback_panel.error_requested.connect(self.error_requested)
-        self.batch_feedback_panel.toast_requested.connect(self.toast_requested)
-        self.batch_feedback_panel.feedback_saved.connect(self._batch_feedback_saved)
-        self.feedback_mode_stack.addWidget(self.batch_feedback_panel)
-        layout.addWidget(self.feedback_mode_stack)
+        layout.addLayout(save_actions)
         return card
 
     def set_group(self, group: ProjectGroup, preferred_project: str | None = None) -> None:
-        preserve_batch = bool(
-            self.group and self.group.root.resolve() == group.root.resolve()
-        )
         self.group = group
         self._structure_notice_key = None
         self._active_notice = None
@@ -610,7 +578,6 @@ class HomePage(QWidget):
         self.saved_feedback.clear()
         self._refresh_pending_list()
         self._refresh_saved_list()
-        self.batch_feedback_panel.set_group(group, preserve=preserve_batch)
         self._populate_group_selector()
         self.root_path_label.setText(str(group.root))
         self.root_path_label.setToolTip(str(group.root))
@@ -619,6 +586,7 @@ class HomePage(QWidget):
             self.open_root_button,
             self.refresh_button,
             self.completed_button,
+            self.batch_feedback_button,
             self.workflow_button,
             self.delete_group_button,
         ):
@@ -662,11 +630,11 @@ class HomePage(QWidget):
         self._structure_notice_key = None
         self.current_project = None
         self.current_task_content = ""
+        self.current_task_validation = TaskValidationResult(False, False)
         self.pending_feedback.clear()
         self.saved_feedback.clear()
         self._refresh_pending_list()
         self._refresh_saved_list()
-        self.batch_feedback_panel.clear_group()
         self.project_list.clear()
         self._active_notice = None
         self.notice_banner.hide()
@@ -678,6 +646,7 @@ class HomePage(QWidget):
             self.open_root_button,
             self.refresh_button,
             self.completed_button,
+            self.batch_feedback_button,
             self.workflow_button,
             self.archive_button,
             self.open_project_button,
@@ -1018,14 +987,23 @@ class HomePage(QWidget):
         self.open_project_button.setEnabled(True)
         self.acceptance_button.setEnabled(True)
         self.record_button.setEnabled(True)
-        self._refresh_project_state()
+        self._refresh_project_state(auto_task_type=True)
         self.project_selected.emit(
             self.group.root, next_project.project_id or next_project.name
         )
 
-    def _refresh_project_state(self) -> None:
+    def _refresh_project_state(
+        self,
+        preferred_round: int | None = None,
+        auto_task_type: bool = False,
+    ) -> None:
         if not self.current_project:
             return
+        selected_before_refresh = (
+            preferred_round
+            if preferred_round is not None
+            else self.feedback_round_combo.currentData()
+        )
         task_path = self.current_project.path / "当前任务.md"
         task_content = ""
         if task_path.is_file():
@@ -1036,9 +1014,21 @@ class HomePage(QWidget):
                     f"无法读取当前任务：{task_path}\n请检查文件权限和编码。\n\n{exc}"
                 )
         self.current_task_content = task_content
-        has_task = bool(task_content.strip())
-        self.task_preview_button.setEnabled(has_task)
-        self.task_status_text.setText(self._task_status(task_content))
+        self.task_preview_button.setEnabled(bool(task_content.strip()))
+        if auto_task_type and task_content.strip():
+            try:
+                stored_task = self.task_service.validate_current_task(
+                    self.current_project.path
+                )
+                metadata = stored_task.metadata or {}
+            except Exception:
+                metadata = {}
+            stored_requirements = str(metadata.get("special_requirements", "无"))
+            self.requirements_input.blockSignals(True)
+            self.requirements_input.setPlainText(
+                "" if stored_requirements == "无" else stored_requirements
+            )
+            self.requirements_input.blockSignals(False)
 
         try:
             if not self.group:
@@ -1075,49 +1065,100 @@ class HomePage(QWidget):
         for number in rounds:
             self.feedback_round_combo.addItem(f"第{number}轮", number)
         if rounds:
-            self.feedback_round_combo.setCurrentIndex(len(rounds) - 1)
-            self.latest_feedback_label.setText(f"当前最新反馈：第{rounds[-1]}轮")
-            self.saved_feedback = list(
-                self.feedback_service.saved_items(
-                    self.current_project.path, rounds[-1]
-                )
+            selected_index = self.feedback_round_combo.findData(selected_before_refresh)
+            self.feedback_round_combo.setCurrentIndex(
+                selected_index if selected_index >= 0 else len(rounds) - 1
+            )
+            self.feedback_round_combo.setEnabled(True)
+            self.latest_feedback_label.setText(
+                f"当前共 {len(rounds)} 轮 · 最新第{rounds[-1]}轮"
             )
         else:
+            self.feedback_round_combo.setEnabled(False)
             self.latest_feedback_label.setText("尚无反馈轮次")
-            self.saved_feedback = []
         self.feedback_round_combo.blockSignals(False)
-        self._refresh_saved_list()
+        if auto_task_type:
+            self._set_task_type(
+                TaskType.FEEDBACK_MODIFICATION if rounds else TaskType.FIRST_BUILD
+            )
+        self._refresh_selected_round_materials()
         self._update_feedback_actions()
         self._update_task_mode_state()
 
     def _on_task_mode_changed(self) -> None:
         self._update_task_mode_state()
 
-    def _on_feedback_import_mode_changed(self) -> None:
-        batch_mode = self.feedback_import_mode_group.checkedId() == 1
-        self.feedback_mode_stack.setCurrentIndex(1 if batch_mode else 0)
-        self.latest_feedback_label.setVisible(not batch_mode)
-        if batch_mode:
-            self.batch_feedback_panel.refresh_preview()
+    def _on_feedback_round_changed(self) -> None:
+        if self.feedback_round_combo.currentData() is not None:
+            self._set_task_type(TaskType.FEEDBACK_MODIFICATION)
+        self._refresh_selected_round_materials()
+        self._update_feedback_actions()
+        self._update_task_mode_state()
 
-    def _batch_feedback_saved(self) -> None:
-        if self.current_project:
-            self._refresh_project_state()
+    def _refresh_selected_round_materials(self) -> None:
+        round_number = self.feedback_round_combo.currentData()
+        if self.current_project is None or round_number is None:
+            self.saved_feedback = []
+            self.selected_round_hint.setText("项目尚无反馈")
+        else:
+            selected = int(round_number)
+            self.saved_feedback = list(
+                self.feedback_service.saved_items(self.current_project.path, selected)
+            )
+            self.selected_round_hint.setText(f"正在查看第{selected}轮")
+        self._refresh_saved_list()
 
-    def has_unsaved_batch_feedback(self) -> bool:
-        return self.batch_feedback_panel.has_unsaved_content()
+    def _selected_task_type(self) -> TaskType:
+        if self.feedback_task_button.isChecked():
+            return TaskType.FEEDBACK_MODIFICATION
+        return TaskType.FIRST_BUILD
 
-    def discard_unsaved_batch_feedback(self) -> None:
-        self.batch_feedback_panel.discard_unsaved_content()
+    def _set_task_type(self, task_type: TaskType) -> None:
+        button = (
+            self.feedback_task_button
+            if task_type is TaskType.FEEDBACK_MODIFICATION
+            else self.first_build_button
+        )
+        button.setChecked(True)
+
+    def _selected_feedback_round(self) -> int | None:
+        value = self.feedback_round_combo.currentData()
+        return int(value) if value is not None else None
+
+    def _refresh_task_validation(self) -> TaskValidationResult:
+        if self.current_project is None:
+            self.current_task_validation = TaskValidationResult(False, False)
+            return self.current_task_validation
+        task_type = self._selected_task_type()
+        round_number = (
+            self._selected_feedback_round()
+            if task_type is TaskType.FEEDBACK_MODIFICATION
+            else 0
+        )
+        try:
+            self.current_task_validation = self.task_service.validate_current_task(
+                self.current_project.path,
+                expected_task_type=task_type,
+                expected_round=round_number,
+                expected_special_requirements=self.requirements_input.toPlainText(),
+            )
+        except Exception as exc:
+            self.current_task_validation = TaskValidationResult(
+                False,
+                bool(self.current_task_content.strip()),
+                f"任务校验失败：{exc}",
+            )
+        return self.current_task_validation
 
     def _update_task_mode_state(self) -> None:
-        feedback_mode = self.task_mode_group.checkedId() == 1
-        self.round_widget.setVisible(feedback_mode)
+        feedback_mode = self._selected_task_type() is TaskType.FEEDBACK_MODIFICATION
         no_rounds = self.feedback_round_combo.count() == 0
         self.feedback_task_hint.setVisible(feedback_mode and no_rounds)
         self.first_execute_button.setVisible(not feedback_mode)
         self.feedback_execute_button.setVisible(feedback_mode)
-        matching_task = self._task_matches_selected_mode()
+        validation = self._refresh_task_validation()
+        self.task_status_text.setText(validation.status_text)
+        matching_task = validation.valid
         self.first_execute_button.setEnabled(
             not feedback_mode and matching_task and self.current_project is not None
         )
@@ -1127,58 +1168,43 @@ class HomePage(QWidget):
         self.generate_button.setEnabled(
             self.current_project is not None and (not feedback_mode or not no_rounds)
         )
-        if matching_task:
-            self.generate_button.setText("重新生成任务")
-        elif feedback_mode:
-            self.generate_button.setText("生成反馈修改任务")
+        if feedback_mode:
+            round_number = self._selected_feedback_round()
+            action = "重新生成" if matching_task else "生成"
+            self.generate_button.setText(
+                f"{action}第{round_number}轮反馈修改任务"
+                if round_number is not None
+                else "生成反馈修改任务"
+            )
         else:
-            self.generate_button.setText("生成当前任务")
+            self.generate_button.setText(
+                "重新生成首次制作任务" if matching_task else "生成首次制作任务"
+            )
 
     def _task_matches_selected_mode(self) -> bool:
-        content = self.current_task_content
-        if not content.strip():
-            return False
-        if self.task_mode_group.checkedId() == 0:
-            return "任务类型：首次制作" in content
-        round_number = self.feedback_round_combo.currentData()
-        return (
-            round_number is not None
-            and "任务类型：反馈修改" in content
-            and f"反馈轮次：第{int(round_number)}轮" in content
-        )
-
-    @staticmethod
-    def _task_status(content: str) -> str:
-        if not content.strip():
-            return "尚未生成当前任务"
-        task_type = "反馈修改" if "任务类型：反馈修改" in content else "首次制作"
-        if task_type == "反馈修改":
-            round_line = next(
-                (line for line in content.splitlines() if line.startswith("反馈轮次：")),
-                "",
-            )
-            if round_line:
-                return f"已有任务：{task_type} · {round_line.removeprefix('反馈轮次：')}"
-        return f"已有任务：{task_type}"
+        return self._refresh_task_validation().valid
 
     def _generate_task(self) -> None:
         if not self.current_project:
             self.error_requested.emit("请先选择项目。")
             return
+        task_type = self._selected_task_type()
         regenerating = self._task_matches_selected_mode()
+        if task_type is TaskType.FIRST_BUILD and not self._confirm_first_build_risk():
+            return
         try:
             if not self.group:
                 raise ValueError("当前项目组未加载。")
             self.project_service.validate_project_structure(
                 self.group.root, self.current_project.path
             )
-            if self.task_mode_group.checkedId() == 1:
-                round_number = self.feedback_round_combo.currentData()
+            if task_type is TaskType.FEEDBACK_MODIFICATION:
+                round_number = self._selected_feedback_round()
                 if round_number is None:
                     raise ValueError("当前项目还没有客户反馈，请先导入反馈。")
                 self.task_service.generate_feedback_task(
                     self.current_project.path,
-                    int(round_number),
+                    round_number,
                     self.requirements_input.toPlainText(),
                 )
             else:
@@ -1189,19 +1215,40 @@ class HomePage(QWidget):
         except Exception as exc:
             self.error_requested.emit(f"生成当前任务失败：{exc}")
             return
-        self._refresh_project_state()
+        self._refresh_project_state(
+            preferred_round=self._selected_feedback_round(),
+            auto_task_type=False,
+        )
         self.toast_requested.emit("任务已重新生成" if regenerating else "当前任务已生成")
+
+    def _confirm_first_build_risk(self) -> bool:
+        if not self.current_project:
+            return False
+        has_feedback = bool(self.feedback_service.scan_rounds(self.current_project.path))
+        has_product = self.archive_service.latest_product(self.current_project.path) is not None
+        if not (has_feedback and has_product):
+            return True
+        answer = QMessageBox.warning(
+            self,
+            "确认重新生成首次制作任务",
+            "当前项目已有有效产品和客户反馈。继续会覆盖“当前任务.md”中的反馈修改任务，"
+            "但不会覆盖历史产品或反馈材料。\n\n确定要切回首次制作吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return answer == QMessageBox.StandardButton.Yes
 
     def _show_task_preview(self) -> None:
         if not self.current_project or not self.current_task_content.strip():
             return
-        try:
-            prompt = self.prompt_service.project_task_execution_instruction(
-                self.current_project.path
-            )
-        except Exception as exc:
-            self.error_requested.emit(f"无法生成执行指令：{exc}")
-            return
+        validation = self._refresh_task_validation()
+        prompt = ""
+        if validation.valid:
+            try:
+                prompt = self._current_execution_instruction()
+            except Exception as exc:
+                self.error_requested.emit(f"无法生成执行指令：{exc}")
+                return
         self._prompt_dialog = PromptDialog(
             "当前任务预览",
             self.current_task_content,
@@ -1209,6 +1256,10 @@ class HomePage(QWidget):
             "复制执行指令",
             copy_text=prompt,
         )
+        if not validation.valid:
+            self._prompt_dialog.copy_button.setEnabled(False)
+            self._prompt_dialog.copy_button.setText("任务已过期，不能复制")
+            self._prompt_dialog.copy_button.setToolTip(validation.reason)
         self._prompt_dialog.exec()
 
     def _copy_current_task_execution_instruction(self) -> None:
@@ -1216,14 +1267,28 @@ class HomePage(QWidget):
             self.error_requested.emit("当前模式尚未生成可执行的任务。")
             return
         try:
-            instruction = self.prompt_service.project_task_execution_instruction(
-                self.current_project.path
-            )
+            instruction = self._current_execution_instruction()
         except Exception as exc:
             self.error_requested.emit(f"无法复制执行指令：{exc}")
             return
         QGuiApplication.clipboard().setText(instruction)
         self.toast_requested.emit("执行指令已复制")
+
+    def _current_execution_instruction(self) -> str:
+        if not self.current_project:
+            raise ValueError("请先选择项目。")
+        task_type = self._selected_task_type()
+        round_number = (
+            self._selected_feedback_round()
+            if task_type is TaskType.FEEDBACK_MODIFICATION
+            else 0
+        )
+        return self.prompt_service.project_task_execution_instruction(
+            self.current_project.path,
+            expected_task_type=task_type,
+            expected_round=round_number,
+            expected_special_requirements=self.requirements_input.toPlainText(),
+        )
 
     def _show_acceptance_prompt(self) -> None:
         if not self.current_project or not self.group:
@@ -1397,7 +1462,7 @@ class HomePage(QWidget):
                 layout_item.widget().hide()
                 layout_item.widget().deleteLater()
         if not self.saved_feedback:
-            empty = QLabel("最新反馈轮次尚无已保存材料。")
+            empty = QLabel("当前选中轮次尚无已保存材料。")
             empty.setObjectName("mutedText")
             self.saved_layout.addWidget(empty)
         else:
@@ -1490,23 +1555,24 @@ class HomePage(QWidget):
             if self.current_project
             else None
         )
+        selected = self._selected_feedback_round()
         has_pending = bool(self.pending_feedback) and self.current_project is not None
         if latest is None:
             self.append_round_button.hide()
             self.new_round_button.setText("保存为第1轮")
         else:
             self.append_round_button.show()
-            self.append_round_button.setText(f"追加到第{latest}轮")
+            self.append_round_button.setText(f"追加到第{selected or latest}轮")
             self.new_round_button.setText(f"创建并保存为第{latest + 1}轮")
-            self.append_round_button.setEnabled(has_pending)
+            self.append_round_button.setEnabled(has_pending and selected is not None)
         self.new_round_button.setEnabled(has_pending)
 
-    def _append_to_latest_round(self) -> None:
+    def _append_to_selected_round(self) -> None:
         if not self.current_project:
             return
-        latest = self.feedback_service.latest_round(self.current_project.path)
-        if latest is not None:
-            self._save_feedback(latest)
+        selected = self._selected_feedback_round()
+        if selected is not None:
+            self._save_feedback(selected)
 
     def _save_to_new_round(self) -> None:
         if not self.current_project:
@@ -1529,14 +1595,47 @@ class HomePage(QWidget):
             item for item in self.pending_feedback if item.item_id not in saved
         ]
         self._refresh_pending_list()
-        self._refresh_project_state()
-        self.batch_feedback_panel.refresh_preview()
         if result.saved_paths:
+            self._set_task_type(TaskType.FEEDBACK_MODIFICATION)
+            self._refresh_project_state(
+                preferred_round=round_number,
+                auto_task_type=False,
+            )
             self.toast_requested.emit(
                 f"已保存 {len(result.saved_paths)} 项到第{round_number}轮"
             )
         if result.errors:
             self.error_requested.emit("部分反馈保存失败：\n" + "\n".join(result.errors))
+
+    def select_project_feedback_round(
+        self, project_identity: str, round_number: int
+    ) -> bool:
+        if not self.group or round_number <= 0:
+            return False
+        target_row = -1
+        for row, project in enumerate(self.group.projects):
+            if project_identity in {
+                project.project_id,
+                project.name,
+                project.display_name,
+                str(project.path),
+            }:
+                target_row = row
+                break
+        if target_row < 0:
+            return False
+        self.project_list.setCurrentRow(target_row)
+        self._refresh_project_state(
+            preferred_round=round_number,
+            auto_task_type=True,
+        )
+        index = self.feedback_round_combo.findData(round_number)
+        if index < 0:
+            return False
+        self.feedback_round_combo.setCurrentIndex(index)
+        self._set_task_type(TaskType.FEEDBACK_MODIFICATION)
+        self._on_feedback_round_changed()
+        return True
 
     def _open_group_root(self) -> None:
         if self.group:

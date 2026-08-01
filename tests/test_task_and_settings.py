@@ -30,7 +30,7 @@ def test_empty_special_requirement_still_generates_task(tmp_path: Path) -> None:
     assert "预期输出：产品迭代/source.html" in content
     assert "产物 ID：" in content
     assert "任务类型：首次制作" in content
-    assert "## 特殊要求\n\n无" in content
+    assert "## 本次特殊要求\n\n无" in content
     assert "AGENT任务规则.md" in content
     assert service.execution_prompt("source") == "执行source当前任务。"
 

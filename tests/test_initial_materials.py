@@ -278,7 +278,7 @@ def test_first_build_task_requires_all_original_materials(
     task = TaskService(resource_root).generate_first_build_task(
         group.projects[0].path, ""
     ).read_text(encoding="utf-8")
-    assert "先枚举该目录中的全部文件" in task
+    assert "枚举“原始需求”全部文件" in task
     assert "JSON 是结构化主需求" in task
     assert "无法读取的二进制材料" in task
 

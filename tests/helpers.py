@@ -1,7 +1,8 @@
 import tempfile
 from pathlib import Path
 
-from services import ToolBinding
+from services import ArchiveService, ProjectService, ToolBinding
+from services.identity_service import write_courseware_meta
 
 
 def tool_binding(resource_root: Path) -> ToolBinding:
@@ -39,3 +40,31 @@ def tool_binding(resource_root: Path) -> ToolBinding:
         template=tools / "template.html",
         validate=tools / "validate-tool.js",
     )
+
+
+def create_valid_product(
+    project_service: ProjectService,
+    project,
+    version_number: int = 0,
+    feedback_round: int = 0,
+) -> Path:
+    archive = ArchiveService(project_service)
+    artifact = archive.allocate_artifact(
+        project.path,
+        version_number,
+        feedback_round,
+    )
+    product = project.path / "产品迭代" / artifact["expected_name"]
+    product.write_text(
+        "<!doctype html><html><head><title>测试产品</title></head>"
+        "<body><section class=\"slide\">测试产品</section></body></html>\n",
+        encoding="utf-8",
+    )
+    write_courseware_meta(
+        product,
+        project.project_id,
+        artifact["artifact_id"],
+        version_number,
+        feedback_round,
+    )
+    return product

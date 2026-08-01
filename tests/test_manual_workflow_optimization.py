@@ -15,7 +15,7 @@ from services import (
     WorkflowOptimizationError,
     WorkflowOptimizationService,
 )
-from tests.helpers import tool_binding
+from tests.helpers import create_valid_product, tool_binding
 from ui.main_window import MainWindow
 
 
@@ -359,6 +359,8 @@ def test_home_first_build_and_feedback_modes_copy_execution_instruction(
     home.first_execute_button.click()
     expected = f"请读取并完整执行以下任务文件：\n{project.path / '当前任务.md'}"
     assert QGuiApplication.clipboard().text() == expected
+
+    create_valid_product(ProjectService(resource_root), project)
 
     feedback_round = project.path / "客户反馈" / "第1轮"
     feedback_round.mkdir()
