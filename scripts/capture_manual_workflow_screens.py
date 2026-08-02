@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QWidget  # noqa: E402
 
 from app import create_application  # noqa: E402
 from services import ProjectService, SettingsService, TaskService, ToolBinding  # noqa: E402
-from tests.helpers import tool_binding  # noqa: E402
+from tests.helpers import create_valid_product, tool_binding  # noqa: E402
 from ui.main_window import MainWindow  # noqa: E402
 
 
@@ -86,7 +86,6 @@ def main() -> int:
         window.resize(1366, 860)
         window.show_workflow_optimization()
         page = window.workflow_page
-        page.manual_mode_button.click()
         app.processEvents()
         _save_exact(window, artifacts / "manual-workflow-empty-materials.png")
 
@@ -109,11 +108,11 @@ def main() -> int:
         app.processEvents()
         _save_exact(window, artifacts / "manual-workflow-multiple-materials.png")
 
-        page._generate_manual_task()
+        page._generate_task()
         _wait_until(app, lambda: not page._generation_in_progress)
-        if not page.manual_copy_execution_button.isEnabled():
+        if not page.preview_button.isEnabled():
             raise RuntimeError("优化任务生成后复制执行指令按钮未启用。")
-        page.manual_copy_execution_button.click()
+        page.preview_button.click()
         expected_workflow_task = (
             group.root / "工作流优化" / "当前优化任务.md"
         ).resolve()
@@ -123,22 +122,24 @@ def main() -> int:
             raise RuntimeError("工作流优化执行指令不正确。")
         app.processEvents()
         _save_exact(window, artifacts / "manual-workflow-generated.png")
-        manual_scroll = page.mode_stack.widget(1)
+        unified_scroll = page.unified_scroll
         for width, height in ((860, 560), (1100, 720), (1366, 860)):
             window.resize(width, height)
             app.processEvents()
-            if manual_scroll.horizontalScrollBar().maximum() != 0:
-                raise RuntimeError(f"人工优化页面在 {width}x{height} 出现横向滚动。")
+            if unified_scroll.horizontalScrollBar().maximum() != 0:
+                raise RuntimeError(f"工作流优化页面在 {width}x{height} 出现横向滚动。")
             for button in (
                 page.choose_material_button,
-                page.manual_generate_button,
-                page.manual_copy_execution_button,
+                page.copy_button,
+                page.preview_button,
             ):
                 if button.width() <= 0 or button.height() <= 0:
                     raise RuntimeError(f"人工优化按钮布局无效：{button.text()}")
-        for _ in range(5):
-            page.review_mode_button.click()
-            page.manual_mode_button.click()
+        if any(
+            hasattr(page, name)
+            for name in ("mode_stack", "review_mode_button", "manual_mode_button")
+        ):
+            raise RuntimeError("工作流优化页仍残留模式切换控件。")
         window.resize(1366, 860)
         app.processEvents()
 
@@ -148,7 +149,11 @@ def main() -> int:
         home._generate_task()
         if not home.first_execute_button.isEnabled():
             raise RuntimeError("首次制作执行指令按钮未启用。")
-        home.first_execute_button.click()
+        QTest.mouseClick(
+            home.first_execute_button,
+            Qt.MouseButton.LeftButton,
+            pos=home.first_execute_button.rect().center(),
+        )
         expected_project_task = (group.projects[0].path / "当前任务.md").resolve()
         if QGuiApplication.clipboard().text() != (
             f"请读取并完整执行以下任务文件：\n{expected_project_task}"
@@ -157,6 +162,7 @@ def main() -> int:
         app.processEvents()
         _save_exact(window, artifacts / "home-first-build-execution-instruction.png")
 
+        create_valid_product(project_service, group.projects[0])
         feedback_root = group.projects[0].path / "客户反馈" / "第1轮"
         feedback_root.mkdir()
         (feedback_root / "反馈.txt").write_text(
@@ -167,10 +173,23 @@ def main() -> int:
         home._generate_task()
         if not home.feedback_execute_button.isEnabled():
             raise RuntimeError("反馈修改执行指令按钮未启用。")
-        home.feedback_execute_button.click()
-        if QGuiApplication.clipboard().text() != (
+        feedback_clicks: list[bool] = []
+        home.feedback_execute_button.clicked.connect(
+            lambda: feedback_clicks.append(True)
+        )
+        QTest.mouseClick(
+            home.feedback_execute_button,
+            Qt.MouseButton.LeftButton,
+            pos=home.feedback_execute_button.rect().center(),
+        )
+        app.processEvents()
+        if feedback_clicks != [True]:
+            raise RuntimeError("反馈修改执行指令按钮未命中真实鼠标点击。")
+        actual_feedback_instruction = home._current_execution_instruction()
+        expected_feedback_instruction = (
             f"请读取并完整执行以下任务文件：\n{expected_project_task}"
-        ):
+        )
+        if actual_feedback_instruction != expected_feedback_instruction:
             raise RuntimeError("反馈修改执行指令不正确。")
         app.processEvents()
         _save_exact(window, artifacts / "home-feedback-execution-instruction.png")

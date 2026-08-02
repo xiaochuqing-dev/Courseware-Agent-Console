@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import hashlib
+import os
 import shutil
 import zipfile
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ class PendingFeedback:
     status: str = "等待保存"
     error: str = ""
     fingerprint: str = ""
+    system_managed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,8 +33,24 @@ class FeedbackSaveResult:
     errors: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class FeedbackRecycleResult:
+    project_root: Path
+    round_number: int
+    recycled_path: Path
+    remaining_items: tuple[PendingFeedback, ...]
+
+
+class FeedbackRecycleError(RuntimeError):
+    pass
+
+
 class FeedbackService:
     ROUND_PATTERN = re.compile(r"^第([1-9]\d*)轮$")
+    SYSTEM_BATCH_NOTE_PATTERN = re.compile(
+        r"^批量反馈说明-\d{8}-\d{6}-[0-9a-f]{8}\.txt$",
+        re.IGNORECASE,
+    )
     IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
     WORD_SUFFIXES = {".docx", ".doc"}
     SUPPORTED_SUFFIXES = IMAGE_SUFFIXES | WORD_SUFFIXES | {".pdf", ".txt"}
@@ -46,7 +64,7 @@ class FeedbackService:
             return ()
         rounds: list[int] = []
         for path in feedback_root.iterdir():
-            if not path.is_dir():
+            if path.is_symlink() or not path.is_dir():
                 continue
             match = self.ROUND_PATTERN.fullmatch(path.name)
             if match:
@@ -65,8 +83,11 @@ class FeedbackService:
             return ()
         items: list[PendingFeedback] = []
         for path in sorted(round_root.iterdir(), key=lambda item: item.name.lower()):
-            if not path.is_file():
+            if path.name.startswith(".") and ".recycle-backup-" in path.name:
                 continue
+            if path.is_symlink() or not path.is_file():
+                continue
+            system_managed = self.is_batch_feedback_note(path.name)
             try:
                 parsed = self.pending_from_file(path)
                 items.append(
@@ -78,12 +99,17 @@ class FeedbackService:
                         preview=parsed.preview,
                         size_bytes=parsed.size_bytes,
                         detail=parsed.detail,
-                        status="已保存",
+                        status="系统批量说明" if system_managed else "已保存",
                         fingerprint=parsed.fingerprint,
+                        system_managed=system_managed,
                     )
                 )
             except Exception as exc:
                 size = path.stat().st_size if path.exists() else 0
+                try:
+                    fingerprint = self._file_sha256(path)
+                except OSError:
+                    fingerprint = ""
                 items.append(
                     PendingFeedback(
                         item_id=uuid4().hex,
@@ -94,9 +120,195 @@ class FeedbackService:
                         detail=self.format_size(size),
                         status="解析失败",
                         error=str(exc),
+                        fingerprint=fingerprint,
+                        system_managed=system_managed,
                     )
                 )
         return tuple(items)
+
+    def recycle_saved_item(
+        self,
+        project_root: Path,
+        round_number: int,
+        expected_path: Path,
+        expected_sha256: str,
+    ) -> FeedbackRecycleResult:
+        if round_number <= 0:
+            raise FeedbackRecycleError("反馈轮次必须大于 0。")
+
+        raw_project = Path(project_root).expanduser()
+        if raw_project.is_symlink():
+            raise FeedbackRecycleError("项目目录不能是符号链接。")
+        try:
+            project = raw_project.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise FeedbackRecycleError(f"项目目录不存在或无法解析：{raw_project}") from exc
+        if not project.is_dir():
+            raise FeedbackRecycleError(f"项目目录不存在：{project}")
+
+        feedback_root_raw = project / "客户反馈"
+        round_root_raw = project / "客户反馈" / f"第{round_number}轮"
+        if (
+            feedback_root_raw.is_symlink()
+            or round_root_raw.is_symlink()
+            or not feedback_root_raw.is_dir()
+            or not round_root_raw.is_dir()
+        ):
+            raise FeedbackRecycleError(f"反馈轮次目录不存在或不安全：{round_root_raw}")
+        try:
+            feedback_root = feedback_root_raw.resolve(strict=True)
+            round_root = round_root_raw.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise FeedbackRecycleError(
+                f"反馈轮次目录无法安全解析：{round_root_raw}"
+            ) from exc
+        if feedback_root.parent != project or round_root.parent != feedback_root:
+            raise FeedbackRecycleError("反馈轮次目录越出当前项目，已停止删除。")
+
+        raw_target = Path(expected_path).expanduser()
+        if raw_target.is_symlink():
+            raise FeedbackRecycleError("拒绝删除符号链接，请刷新材料列表。")
+        try:
+            target = raw_target.resolve(strict=True)
+        except FileNotFoundError as exc:
+            raise FeedbackRecycleError("反馈材料已不存在，请刷新材料列表。") from exc
+        except (OSError, RuntimeError) as exc:
+            raise FeedbackRecycleError("反馈材料路径无法安全解析，请刷新列表。") from exc
+        if target.parent != round_root:
+            raise FeedbackRecycleError(
+                "目标文件不在当前项目的指定反馈轮次目录中，已停止删除。"
+            )
+        if not target.is_file():
+            raise FeedbackRecycleError("目标不是普通文件，已停止删除。")
+        if self.is_batch_feedback_note(target.name):
+            raise FeedbackRecycleError(
+                "系统批量说明用于防串项目和批次识别，不能作为普通材料删除。"
+            )
+
+        expected_digest = str(expected_sha256).strip().upper()
+        if not re.fullmatch(r"[0-9A-F]{64}", expected_digest):
+            raise FeedbackRecycleError("材料哈希无效，请刷新材料列表后重试。")
+
+        backup = round_root / f".{target.name}.recycle-backup-{uuid4().hex}"
+        digest = hashlib.sha256()
+
+        def identity(file_stat) -> tuple[int, int, int, int]:
+            return (
+                file_stat.st_dev,
+                file_stat.st_ino,
+                file_stat.st_size,
+                file_stat.st_mtime_ns,
+            )
+
+        def discard_backup() -> None:
+            try:
+                backup.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        try:
+            before = target.stat()
+            with target.open("rb") as source, backup.open("xb") as destination:
+                if identity(before) != identity(os.fstat(source.fileno())):
+                    raise FeedbackRecycleError(
+                        "反馈材料已被外部替换或修改，请刷新列表后重试。"
+                    )
+                for block in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(block)
+                    destination.write(block)
+                destination.flush()
+                os.fsync(destination.fileno())
+            try:
+                os.chmod(backup, before.st_mode)
+                os.utime(
+                    backup,
+                    ns=(before.st_atime_ns, before.st_mtime_ns),
+                )
+            except OSError:
+                pass
+        except FeedbackRecycleError:
+            discard_backup()
+            raise
+        except (OSError, RuntimeError) as exc:
+            discard_backup()
+            raise FeedbackRecycleError(
+                f"无法准备安全回收副本，原文件未改变：{exc}"
+            ) from exc
+
+        actual_digest = digest.hexdigest().upper()
+        try:
+            after = target.stat()
+            stable_identity = identity(before) == identity(after)
+            if (
+                actual_digest != expected_digest
+                or self._file_sha256(backup) != expected_digest
+                or not stable_identity
+                or raw_target.is_symlink()
+                or raw_target.resolve(strict=True) != target
+            ):
+                raise FeedbackRecycleError(
+                    "反馈材料已被外部替换或修改，请刷新列表后重试。"
+                )
+        except FeedbackRecycleError:
+            discard_backup()
+            raise
+        except (OSError, RuntimeError) as exc:
+            discard_backup()
+            raise FeedbackRecycleError(
+                "反馈材料身份复核失败，请刷新列表后重试。"
+            ) from exc
+
+        try:
+            from send2trash import send2trash
+
+            send2trash(str(target))
+            if target.exists():
+                raise OSError("系统未确认文件已进入回收站")
+        except Exception as exc:
+            try:
+                if target.exists():
+                    backup.unlink(missing_ok=True)
+                else:
+                    backup.replace(target)
+            except OSError as restore_exc:
+                raise FeedbackRecycleError(
+                    f"回收失败且安全副本恢复失败：{restore_exc}"
+                ) from exc
+            raise FeedbackRecycleError(
+                f"文件暂时无法移入系统回收站，原文件已保留：{exc}"
+            ) from exc
+
+        try:
+            backup.unlink()
+        except OSError as exc:
+            try:
+                if not target.exists():
+                    backup.replace(target)
+            except OSError as restore_exc:
+                raise FeedbackRecycleError(
+                    f"回收后安全副本清理失败且无法恢复：{restore_exc}"
+                ) from exc
+            raise FeedbackRecycleError(
+                "安全副本清理失败，已恢复原文件，请重试。"
+            ) from exc
+
+        try:
+            remaining_items = self.saved_items(project, round_number)
+        except Exception as exc:
+            raise FeedbackRecycleError(
+                "文件已移入系统回收站，但材料列表刷新失败，请手动刷新。"
+            ) from exc
+
+        return FeedbackRecycleResult(
+            project_root=project,
+            round_number=round_number,
+            recycled_path=target,
+            remaining_items=remaining_items,
+        )
+
+    @staticmethod
+    def is_batch_feedback_note(name: str) -> bool:
+        return bool(FeedbackService.SYSTEM_BATCH_NOTE_PATTERN.fullmatch(str(name)))
 
     def pending_from_file(
         self, source: Path, reserved_names: set[str] | None = None

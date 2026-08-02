@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
@@ -306,8 +306,10 @@ def test_gui_material_binding_survives_reorder_and_rename(
     assert page.json_files == [sources[1], sources[0]]
     assert page.materials_by_project[first_key] == [material]
     assert page.project_materials()[first_key] == [material]
-    assert "材料 1 个" in page.mapping_list.item(1).text()
-    assert "重命名项目" in page.mapping_list.item(1).text()
+    mapping_row = page.mapping_list.itemWidget(page.mapping_list.item(1))
+    assert mapping_row is not None
+    assert mapping_row.material_label.text() == "1 个"
+    assert mapping_row.project_label.text() == "重命名项目"
     page.close()
     app.processEvents()
 
@@ -360,6 +362,134 @@ def test_gui_duplicate_add_and_cancelled_dialog_keep_materials_unchanged(
         page._choose_material_files()
 
     assert page.project_materials()[service.path_key(source)] == [material]
+    page.close()
+    app.processEvents()
+
+
+def test_mapping_layout_uses_structured_columns_and_delete_only_draft_binding(
+    app: QApplication,
+    tmp_path: Path,
+    resource_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = ProjectService(resource_root)
+    sources = [
+        write_json(tmp_path / "one.json", "one"),
+        write_json(tmp_path / "two.json", "two"),
+        write_json(tmp_path / "three.json", "three"),
+    ]
+    first_material = write_material(tmp_path / "first.png", b"first")
+    second_material = write_material(tmp_path / "second.png", b"second")
+    page = CreateProjectPage(service)
+    page.count_input.setValue(3)
+    page.add_json_files(sources)
+    page.mapping_list.setCurrentRow(0)
+    page.add_material_files([first_material])
+    page.mapping_list.setCurrentRow(1)
+    page.add_material_files([second_material])
+
+    assert page.mapping_list.maximumHeight() == 160
+    assert page.material_list.maximumHeight() == 100
+    assert page.mapping_edit_button.text() == "编辑名称"
+    assert page.remove_material_button.text() == "移除所选"
+    assert page.clear_materials_button.text() == "清空材料"
+    header_texts = (
+        page.mapping_columns.sequence_label.text(),
+        page.mapping_columns.project_label.text(),
+        page.mapping_columns.material_label.text(),
+        page.mapping_columns.json_label.text(),
+    )
+    assert header_texts == (
+        "序号",
+        "项目名称（最终目录）",
+        "材料数量",
+        "原始 JSON",
+    )
+    assert all("|" not in text for text in header_texts)
+    for index in range(page.mapping_list.count()):
+        item = page.mapping_list.item(index)
+        row = page.mapping_list.itemWidget(item)
+        assert item.text() == ""
+        assert row is not None
+        assert row.sequence_label.text() == str(index + 1)
+        assert row.material_label.text().endswith("个")
+        assert all(
+            "|" not in label.text()
+            for label in (
+                row.sequence_label,
+                row.project_label,
+                row.material_label,
+                row.json_label,
+            )
+        )
+    second_row = page.mapping_list.itemWidget(page.mapping_list.item(1))
+    QTest.mouseClick(
+        page.mapping_list.viewport(),
+        Qt.MouseButton.LeftButton,
+        pos=page.mapping_list.visualItemRect(
+            page.mapping_list.item(1)
+        ).center(),
+    )
+    app.processEvents()
+    assert page.mapping_list.currentRow() == 1
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    page.mapping_list.setCurrentRow(0)
+    page.mapping_remove_button.click()
+    app.processEvents()
+
+    first_key = service.path_key(sources[0])
+    second_key = service.path_key(sources[1])
+    assert sources[0].is_file()
+    assert first_material.is_file()
+    assert page.json_files == sources[1:]
+    assert first_key not in page.project_names_by_path
+    assert first_key not in page.materials_by_project
+    assert page.materials_by_project[second_key] == [second_material]
+    assert page._current_json_path() == sources[1]
+    assert page.mapping_list.count() == 2
+    assert page.json_status.text() == "还需要 1 个 JSON 文件。"
+    page.close()
+    app.processEvents()
+
+
+def test_original_material_controls_remove_and_clear_only_current_project(
+    app: QApplication, tmp_path: Path, resource_root: Path
+) -> None:
+    service = ProjectService(resource_root)
+    first_source = write_json(tmp_path / "first.json", "first")
+    second_source = write_json(tmp_path / "second.json", "second")
+    first_a = write_material(tmp_path / "first-a.png", b"a")
+    first_b = write_material(tmp_path / "first-b.pdf", b"b")
+    second = write_material(tmp_path / "second.txt", b"second")
+    page = CreateProjectPage(service)
+    page.count_input.setValue(2)
+    page.add_json_files([first_source, second_source])
+    page.mapping_list.setCurrentRow(0)
+    page.add_material_files([first_a, first_b])
+    page.mapping_list.setCurrentRow(1)
+    page.add_material_files([second])
+    page.mapping_list.setCurrentRow(0)
+
+    assert page.material_list.itemWidget(page.material_list.item(0)) is None
+    assert "|" not in page.material_list.item(0).text()
+    page.material_list.item(0).setSelected(True)
+    page.remove_material_button.click()
+    app.processEvents()
+
+    first_key = service.path_key(first_source)
+    second_key = service.path_key(second_source)
+    assert first_a.is_file()
+    assert page.materials_by_project[first_key] == [first_b]
+    assert page.materials_by_project[second_key] == [second]
+    page._clear_materials()
+    assert page.materials_by_project[first_key] == []
+    assert page.materials_by_project[second_key] == [second]
+    assert second.is_file()
     page.close()
     app.processEvents()
 

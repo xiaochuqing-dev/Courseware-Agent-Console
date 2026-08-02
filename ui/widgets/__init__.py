@@ -5,6 +5,7 @@ from .card import Card
 from .elided_label import ElidedLabel
 from .feedback_drop import FeedbackDropArea, PendingFeedbackRow
 from .flow_layout import FlowLayout
+from .glass_check_box import GlassCheckBox
 from .prompt_dialog import PromptDialog
 from .sidebar_card import SidebarCard
 from .toast import Toast
@@ -18,6 +19,7 @@ __all__ = [
     "ElidedLabel",
     "FeedbackDropArea",
     "FlowLayout",
+    "GlassCheckBox",
     "PendingFeedbackRow",
     "PromptDialog",
     "SidebarCard",

@@ -16,7 +16,13 @@ from .batch_feedback_service import (
 from .build_info import APP_VERSION, BuildInfo, current_build_info
 from .identity_service import read_courseware_meta, sanitize_project_name
 from .acceptance_service import AcceptanceItem, AcceptanceReport, AcceptanceService
-from .feedback_service import FeedbackSaveResult, FeedbackService, PendingFeedback
+from .feedback_service import (
+    FeedbackRecycleError,
+    FeedbackRecycleResult,
+    FeedbackSaveResult,
+    FeedbackService,
+    PendingFeedback,
+)
 from .project_service import (
     InvalidProjectGroupError,
     MaterialFileInfo,
@@ -43,9 +49,12 @@ from .task_service import (
 from .task_types import TaskType
 from .workflow_optimization_service import (
     WorkflowMaterialInfo,
+    WorkflowOptimizationInput,
     WorkflowOptimizationError,
     WorkflowOptimizationService,
+    WorkflowProjectInfo,
     WorkflowTaskResult,
+    WorkflowTaskValidationResult,
 )
 
 __all__ = [
@@ -65,6 +74,8 @@ __all__ = [
     "AcceptanceReport",
     "AcceptanceService",
     "FeedbackSaveResult",
+    "FeedbackRecycleError",
+    "FeedbackRecycleResult",
     "FeedbackService",
     "InvalidProjectGroupError",
     "MaterialFileInfo",
@@ -89,9 +100,12 @@ __all__ = [
     "TaskValidationResult",
     "ValidationError",
     "WorkflowMaterialInfo",
+    "WorkflowOptimizationInput",
     "WorkflowOptimizationError",
     "WorkflowOptimizationService",
+    "WorkflowProjectInfo",
     "WorkflowTaskResult",
+    "WorkflowTaskValidationResult",
     "current_build_info",
     "read_courseware_meta",
     "sanitize_project_name",

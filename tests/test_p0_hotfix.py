@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QWidget
 
 from services import ProjectService, SettingsService, TaskService, ValidationError
 from ui.main_window import MainWindow
@@ -80,7 +80,10 @@ def test_json_dialog_appends_multiple_batches_and_ignores_duplicates(
 
 
 def test_json_mapping_order_delete_and_count_changes_preserve_files(
-    app: QApplication, resource_root: Path, tmp_path: Path
+    app: QApplication,
+    resource_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     files = make_json_files(tmp_path / "mapping")
     page = CreateProjectPage(ProjectService(resource_root))
@@ -93,7 +96,10 @@ def test_json_mapping_order_delete_and_count_changes_preserve_files(
     page.mapping_list.setCurrentRow(5)
     page._move_mapping(-1)
     assert page.json_files == [*files[:4], files[5], files[4]]
-    assert page.mapping_list.item(4).text().endswith("F.json")
+    assert (
+        page.mapping_list.item(4).data(Qt.ItemDataRole.UserRole + 3)
+        == "F.json"
+    )
 
     page.count_input.setValue(4)
     assert len(page.json_files) == 6
@@ -105,6 +111,11 @@ def test_json_mapping_order_delete_and_count_changes_preserve_files(
     assert page.json_status.text() == "还需要 2 个 JSON 文件。"
 
     page.mapping_list.setCurrentRow(4)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
     page._remove_mapping()
     assert files[5] not in page.json_files
     assert len(page.json_files) == 5

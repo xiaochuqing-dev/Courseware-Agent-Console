@@ -169,7 +169,7 @@ def main() -> int:
                 raise RuntimeError(f"{project.display_name} JSON 复制内容不一致。")
             tasks.generate_first_build_task(project.path, "")
             task = (project.path / "当前任务.md").read_text(encoding="utf-8")
-            if "先枚举该目录中的全部文件" not in task:
+            if "枚举“原始需求”全部文件" not in task:
                 raise RuntimeError(f"{project.display_name} 首次任务未要求读取全部材料。")
 
         window.show_home_page()

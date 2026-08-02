@@ -172,7 +172,9 @@ class TaskService:
         if not feedback_round.is_dir():
             raise FileNotFoundError(f"客户反馈轮次不存在：第{round_number}轮")
         feedback_materials = self._snapshot_files(feedback_round, feedback=True)
-        if not feedback_materials:
+        if not any(
+            not item.get("is_batch_feedback_note") for item in feedback_materials
+        ):
             raise ValueError(
                 f"客户反馈第{round_number}轮没有任何有效材料，不能生成反馈修改任务。"
             )
@@ -724,7 +726,10 @@ class TaskService:
             if not feedback_root.is_dir():
                 raise FileNotFoundError(f"反馈目录已不存在：{feedback_root}")
             feedback_materials = self._snapshot_files(feedback_root, feedback=True)
-            if not feedback_materials:
+            if not any(
+                not item.get("is_batch_feedback_note")
+                for item in feedback_materials
+            ):
                 raise ValueError("当前反馈轮次已无有效材料")
             baseline = self._baseline_product_snapshot(project_path, config)
             if baseline is None:
@@ -776,6 +781,8 @@ class TaskService:
             (item for item in root_path.rglob("*") if item.is_file()),
             key=lambda item: item.relative_to(root_path).as_posix().casefold(),
         ):
+            if path.name.startswith(".") and ".recycle-backup-" in path.name:
+                continue
             if path.is_symlink():
                 raise ValueError(f"任务输入不允许符号链接：{path}")
             resolved = path.resolve()
@@ -797,8 +804,7 @@ class TaskService:
                     "path": str(resolved),
                     "is_batch_feedback_note": bool(
                         feedback
-                        and resolved.name.startswith("批量反馈说明-")
-                        and suffix == ".txt"
+                        and FeedbackService.is_batch_feedback_note(resolved.name)
                     ),
                 }
             )

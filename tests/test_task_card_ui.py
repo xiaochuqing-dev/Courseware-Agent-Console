@@ -132,14 +132,22 @@ def test_round_dropdown_really_switches_materials_and_task_binding(tmp_path: Pat
         round_root.mkdir()
         (round_root / name).write_text(name, encoding="utf-8")
     home._refresh_project_state(auto_task_type=True)
+    window.resize(1100, 720)
+    window.show()
+    app.processEvents()
 
     assert home.feedback_round_combo.count() == 2
     assert home.feedback_round_combo.currentData() == 2
     assert {item.name for item in home.saved_feedback} == {"第二轮.txt"}
 
     home.feedback_round_combo.showPopup()
-    app.processEvents()
     view = home.feedback_round_combo.view()
+    for _ in range(20):
+        app.processEvents()
+        if view.isVisible():
+            break
+        QTest.qWait(20)
+    assert view.isVisible()
     first_index = home.feedback_round_combo.model().index(0, 0)
     QTest.mouseClick(
         view.viewport(),

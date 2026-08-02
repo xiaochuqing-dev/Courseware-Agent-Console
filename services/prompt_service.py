@@ -67,9 +67,11 @@ class PromptService:
         group = Path(group_root).expanduser().resolve()
         if not group.is_dir():
             raise FileNotFoundError(f"项目组目录不存在：{group}")
-        return self.task_execution_instruction(
-            group / "工作流优化" / "当前优化任务.md"
-        )
+        from .workflow_optimization_service import WorkflowOptimizationService
+
+        validator = WorkflowOptimizationService(self.resource_root)
+        validator.require_valid_current_task(group)
+        return self.task_execution_instruction(validator.current_task_path(group))
 
     def product_acceptance_prompt(self, project_root: Path) -> str:
         project_path = Path(project_root).resolve()

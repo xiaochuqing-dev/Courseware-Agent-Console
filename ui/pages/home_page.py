@@ -30,6 +30,7 @@ from models import ProjectEntry, ProjectGroup
 from services import (
     AcceptanceService,
     ArchiveService,
+    FeedbackRecycleError,
     FeedbackService,
     PendingFeedback,
     ProductNotice,
@@ -1105,7 +1106,10 @@ class HomePage(QWidget):
             self.saved_feedback = list(
                 self.feedback_service.saved_items(self.current_project.path, selected)
             )
-            self.selected_round_hint.setText(f"正在查看第{selected}轮")
+            if any(not item.system_managed for item in self.saved_feedback):
+                self.selected_round_hint.setText(f"正在查看第{selected}轮")
+            else:
+                self.selected_round_hint.setText("该轮当前没有有效反馈材料")
         self._refresh_saved_list()
 
     def _selected_task_type(self) -> TaskType:
@@ -1153,11 +1157,31 @@ class HomePage(QWidget):
     def _update_task_mode_state(self) -> None:
         feedback_mode = self._selected_task_type() is TaskType.FEEDBACK_MODIFICATION
         no_rounds = self.feedback_round_combo.count() == 0
-        self.feedback_task_hint.setVisible(feedback_mode and no_rounds)
+        has_effective_feedback = self._selected_round_has_effective_materials()
+        missing_feedback = feedback_mode and (no_rounds or not has_effective_feedback)
+        self.feedback_task_hint.setText(
+            "当前项目还没有客户反馈，请先导入反馈。"
+            if no_rounds
+            else "该轮当前没有有效反馈材料，请先添加反馈材料。"
+        )
+        self.feedback_task_hint.setVisible(missing_feedback)
         self.first_execute_button.setVisible(not feedback_mode)
         self.feedback_execute_button.setVisible(feedback_mode)
         validation = self._refresh_task_validation()
-        self.task_status_text.setText(validation.status_text)
+        feedback_material_changed = (
+            validation.exists
+            and not validation.valid
+            and validation.task_type is TaskType.FEEDBACK_MODIFICATION
+            and (
+                "反馈轮次材料" in validation.reason
+                or "反馈轮次已无有效材料" in validation.reason
+            )
+        )
+        self.task_status_text.setText(
+            f"任务已过期：反馈材料已删除或变化（{validation.reason}）"
+            if feedback_material_changed
+            else validation.status_text
+        )
         matching_task = validation.valid
         self.first_execute_button.setEnabled(
             not feedback_mode and matching_task and self.current_project is not None
@@ -1166,11 +1190,16 @@ class HomePage(QWidget):
             feedback_mode and matching_task and self.current_project is not None
         )
         self.generate_button.setEnabled(
-            self.current_project is not None and (not feedback_mode or not no_rounds)
+            self.current_project is not None
+            and (not feedback_mode or has_effective_feedback)
         )
         if feedback_mode:
             round_number = self._selected_feedback_round()
-            action = "重新生成" if matching_task else "生成"
+            action = (
+                "重新生成"
+                if self._task_exists_for_selected_mode(validation)
+                else "生成"
+            )
             self.generate_button.setText(
                 f"{action}第{round_number}轮反馈修改任务"
                 if round_number is not None
@@ -1184,12 +1213,27 @@ class HomePage(QWidget):
     def _task_matches_selected_mode(self) -> bool:
         return self._refresh_task_validation().valid
 
+    def _task_exists_for_selected_mode(
+        self, validation: TaskValidationResult | None = None
+    ) -> bool:
+        result = validation or self._refresh_task_validation()
+        if not result.exists or result.task_type is not self._selected_task_type():
+            return False
+        if result.task_type is TaskType.FEEDBACK_MODIFICATION:
+            return result.feedback_round == (self._selected_feedback_round() or 0)
+        return True
+
+    def _selected_round_has_effective_materials(self) -> bool:
+        return self._selected_feedback_round() is not None and any(
+            not item.system_managed for item in self.saved_feedback
+        )
+
     def _generate_task(self) -> None:
         if not self.current_project:
             self.error_requested.emit("请先选择项目。")
             return
         task_type = self._selected_task_type()
-        regenerating = self._task_matches_selected_mode()
+        regenerating = self._task_exists_for_selected_mode()
         if task_type is TaskType.FIRST_BUILD and not self._confirm_first_build_risk():
             return
         try:
@@ -1467,10 +1511,85 @@ class HomePage(QWidget):
             self.saved_layout.addWidget(empty)
         else:
             for feedback in self.saved_feedback:
-                row = PendingFeedbackRow(feedback, read_only=True)
+                row = PendingFeedbackRow(
+                    feedback,
+                    read_only=True,
+                    allow_saved_delete=True,
+                )
                 row.preview_requested.connect(self._preview_pending)
+                row.remove_requested.connect(self._remove_saved_feedback)
                 self.saved_layout.addWidget(row)
         self.saved_count_label.setText(f"{len(self.saved_feedback)} 项")
+
+    def _confirm_recycle_saved_item(
+        self, item: PendingFeedback, round_number: int
+    ) -> bool:
+        if self.current_project is None or item.source_path is None:
+            return False
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("确认删除已保存反馈")
+        box.setText(
+            f"将项目“{self.current_project.display_name}”第{round_number}轮的"
+            f"“{item.name}”移入系统回收站吗？"
+        )
+        box.setInformativeText(
+            f"文件路径：{item.source_path}\n\n"
+            "删除后，该轮已生成的反馈修改任务将立即过期，必须重新生成。"
+            "文件不会永久删除。"
+        )
+        recycle_button = box.addButton(
+            "移入回收站", QMessageBox.ButtonRole.DestructiveRole
+        )
+        cancel_button = box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel_button)
+        box.setEscapeButton(cancel_button)
+        box.exec()
+        return box.clickedButton() is recycle_button
+
+    def _remove_saved_feedback(self, item_id: str) -> None:
+        project = self.current_project
+        round_number = self._selected_feedback_round()
+        item = next(
+            (feedback for feedback in self.saved_feedback if feedback.item_id == item_id),
+            None,
+        )
+        if project is None or round_number is None or item is None:
+            return
+        if item.system_managed:
+            self.error_requested.emit(
+                "系统批量说明用于防串项目和批次识别，不能作为普通材料删除。"
+            )
+            return
+        if item.source_path is None or not item.fingerprint:
+            self.error_requested.emit("材料身份不完整，请刷新当前轮次后重试。")
+            return
+        if not self._confirm_recycle_saved_item(item, round_number):
+            return
+
+        try:
+            result = self.feedback_service.recycle_saved_item(
+                project.path,
+                round_number,
+                item.source_path,
+                item.fingerprint,
+            )
+        except FeedbackRecycleError as exc:
+            if self.current_project and self.current_project.path == project.path:
+                self._refresh_project_state(
+                    preferred_round=round_number,
+                    auto_task_type=False,
+                )
+            self.error_requested.emit(f"删除已保存反馈失败：{exc}")
+            return
+
+        if self.current_project and self.current_project.path == project.path:
+            self._set_task_type(TaskType.FEEDBACK_MODIFICATION)
+            self._refresh_project_state(
+                preferred_round=round_number,
+                auto_task_type=False,
+            )
+        self.toast_requested.emit(f"已将 {result.recycled_path.name} 移入系统回收站")
 
     def _preview_pending(self, item_id: str) -> None:
         item = self._feedback_item(item_id)

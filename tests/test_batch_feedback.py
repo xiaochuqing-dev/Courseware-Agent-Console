@@ -4,6 +4,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
+import send2trash
 
 from models import ProjectGroup
 from services import (
@@ -476,6 +477,38 @@ def test_batch_execution_instruction_expires_when_material_changes(
     service.generate_tasks(saved.record_path)
     material = group.projects[0].path / "客户反馈" / "第1轮" / "任务材料.docx"
     material.write_bytes(material.read_bytes() + b"changed")
+
+    with pytest.raises(BatchFeedbackError, match="反馈任务已失效"):
+        service.batch_execution_instruction(saved.record_path)
+
+
+def test_batch_execution_instruction_expires_when_saved_material_is_recycled(
+    batch_group, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_service, group = batch_group
+    service, saved = save_two_project_batch(project_service, group, tmp_path)
+    service.generate_tasks(saved.record_path)
+    feedback_service = FeedbackService()
+    material = group.projects[0].path / "客户反馈" / "第1轮" / "任务材料.docx"
+    item = next(
+        saved_item
+        for saved_item in feedback_service.saved_items(group.projects[0].path, 1)
+        if saved_item.name == material.name
+    )
+    trash = tmp_path / "模拟回收站"
+    trash.mkdir()
+    monkeypatch.setattr(
+        send2trash,
+        "send2trash",
+        lambda path: Path(path).replace(trash / Path(path).name),
+    )
+
+    feedback_service.recycle_saved_item(
+        group.projects[0].path,
+        1,
+        material,
+        item.fingerprint,
+    )
 
     with pytest.raises(BatchFeedbackError, match="反馈任务已失效"):
         service.batch_execution_instruction(saved.record_path)

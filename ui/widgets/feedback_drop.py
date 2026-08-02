@@ -92,9 +92,11 @@ class PendingFeedbackRow(QFrame):
         feedback: PendingFeedback,
         parent: QWidget | None = None,
         read_only: bool = False,
+        allow_saved_delete: bool = False,
     ) -> None:
         super().__init__(parent)
         self.feedback = feedback
+        self.remove_button: QPushButton | None = None
         self.setObjectName("pendingFeedbackRow")
         layout = QHBoxLayout(self)
         self.setMinimumHeight(66)
@@ -124,24 +126,32 @@ class PendingFeedbackRow(QFrame):
         preview = ElidedLabel(detail, mode=Qt.TextElideMode.ElideRight)
         preview.setObjectName("mutedText")
         text_layout.addWidget(preview)
-        status = QLabel(feedback.status)
-        status.setObjectName("feedbackStatus")
-        status.setProperty("status", "error" if feedback.error else "ready")
-        status.setToolTip(feedback.error)
-        text_layout.addWidget(status)
+        system_managed = bool(getattr(feedback, "system_managed", False))
+        status_text = "系统批量说明" if system_managed else feedback.status
+        self.status_label = QLabel(status_text)
+        self.status_label.setObjectName("feedbackStatus")
+        self.status_label.setProperty(
+            "status", "error" if feedback.error else "ready"
+        )
+        self.status_label.setToolTip(
+            "用于防串项目和批次识别，不作为普通反馈材料删除。"
+            if system_managed
+            else feedback.error
+        )
+        text_layout.addWidget(self.status_label)
         layout.addLayout(text_layout, 1)
 
-        preview_button = QPushButton()
-        preview_button.setProperty("role", "quiet")
-        preview_button.setProperty("iconOnly", True)
-        preview_button.setIcon(
+        self.preview_button = QPushButton()
+        self.preview_button.setProperty("role", "quiet")
+        self.preview_button.setProperty("iconOnly", True)
+        self.preview_button.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
         )
-        preview_button.setToolTip("预览反馈材料")
-        preview_button.clicked.connect(
+        self.preview_button.setToolTip("预览反馈材料")
+        self.preview_button.clicked.connect(
             lambda: self.preview_requested.emit(feedback.item_id)
         )
-        layout.addWidget(preview_button)
+        layout.addWidget(self.preview_button)
 
         if feedback.kind == "text" and not read_only:
             edit = QPushButton()
@@ -154,15 +164,23 @@ class PendingFeedbackRow(QFrame):
             edit.clicked.connect(lambda: self.edit_requested.emit(feedback.item_id))
             layout.addWidget(edit)
 
-        if not read_only:
-            remove = QPushButton()
-            remove.setProperty("role", "quiet")
-            remove.setProperty("danger", True)
-            remove.setProperty("iconOnly", True)
-            remove.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
-            remove.setToolTip("移除待保存反馈")
-            remove.clicked.connect(lambda: self.remove_requested.emit(feedback.item_id))
-            layout.addWidget(remove)
+        if not read_only or (allow_saved_delete and not system_managed):
+            self.remove_button = QPushButton()
+            self.remove_button.setProperty("role", "quiet")
+            self.remove_button.setProperty("danger", True)
+            self.remove_button.setProperty("iconOnly", True)
+            self.remove_button.setIcon(
+                self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
+            )
+            self.remove_button.setToolTip(
+                "移入系统回收站并使绑定任务失效"
+                if read_only
+                else "移除待保存反馈"
+            )
+            self.remove_button.clicked.connect(
+                lambda: self.remove_requested.emit(feedback.item_id)
+            )
+            layout.addWidget(self.remove_button)
 
     def _preview_pixmap(self, feedback: PendingFeedback) -> QPixmap:
         pixmap = QPixmap()

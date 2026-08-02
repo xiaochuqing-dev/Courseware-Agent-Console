@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QStandardPaths, QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QSize, QStandardPaths, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QBoxLayout,
@@ -40,6 +40,57 @@ from ui.workers import BackgroundTaskRelay, BackgroundWorker
 
 
 logger = logging.getLogger(LOGGER_NAME)
+
+
+class _ProjectMappingColumns(QWidget):
+    def __init__(
+        self,
+        sequence: str,
+        project_name: str,
+        material_count: str,
+        json_name: str,
+        *,
+        header: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._header = header
+        self.setMinimumHeight(30 if header else 46)
+        self.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+            True,
+        )
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16 if header else 10, 0, 16 if header else 10, 0)
+        layout.setSpacing(12)
+
+        self.sequence_label = QLabel(sequence)
+        self.sequence_label.setFixedWidth(48)
+        self.project_label = QLabel(project_name)
+        self.material_label = QLabel(material_count)
+        self.material_label.setFixedWidth(90)
+        self.json_label = QLabel(json_name)
+        self.json_label.setMinimumWidth(110)
+
+        for label in (
+            self.sequence_label,
+            self.project_label,
+            self.material_label,
+            self.json_label,
+        ):
+            label.setWordWrap(False)
+            label.setAttribute(
+                Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+                True,
+            )
+            if header:
+                label.setObjectName("fieldLabel")
+
+        layout.addWidget(self.sequence_label)
+        layout.addWidget(self.project_label, 4)
+        layout.addWidget(self.material_label)
+        layout.addWidget(self.json_label, 3)
 
 
 class CreateProjectPage(QWidget):
@@ -235,7 +286,9 @@ class CreateProjectPage(QWidget):
         self.mapping_remove_button.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
         )
-        self.mapping_remove_button.setToolTip("删除所选 JSON")
+        self.mapping_remove_button.setToolTip(
+            "仅从当前创建草稿移除所选 JSON，不删除源文件"
+        )
         self.mapping_remove_button.clicked.connect(self._remove_mapping)
         mapping_title_row.addWidget(self.mapping_remove_button)
         self.mapping_edit_button = QPushButton("编辑名称")
@@ -244,9 +297,14 @@ class CreateProjectPage(QWidget):
         mapping_title_row.addWidget(self.mapping_edit_button)
         mapping_layout.addLayout(mapping_title_row)
 
-        mapping_columns = QLabel("序号  |  项目名称（最终目录）  |  材料数量  |  原始 JSON")
-        mapping_columns.setObjectName("fieldLabel")
-        mapping_layout.addWidget(mapping_columns)
+        self.mapping_columns = _ProjectMappingColumns(
+            "序号",
+            "项目名称（最终目录）",
+            "材料数量",
+            "原始 JSON",
+            header=True,
+        )
+        mapping_layout.addWidget(self.mapping_columns)
 
         self.mapping_list = QListWidget()
         self.mapping_list.setObjectName("mappingList")
@@ -282,9 +340,15 @@ class CreateProjectPage(QWidget):
         self.add_material_button.clicked.connect(self._choose_material_files)
         material_buttons.addWidget(self.add_material_button)
         self.remove_material_button = QPushButton("移除所选")
+        self.remove_material_button.setToolTip(
+            "仅移除当前项目的材料绑定，不删除源材料"
+        )
         self.remove_material_button.clicked.connect(self._remove_selected_materials)
         material_buttons.addWidget(self.remove_material_button)
         self.clear_materials_button = QPushButton("清空材料")
+        self.clear_materials_button.setToolTip(
+            "仅清空当前项目的材料绑定，不影响其他项目或源材料"
+        )
         self.clear_materials_button.clicked.connect(self._clear_materials)
         material_buttons.addWidget(self.clear_materials_button)
         mapping_layout.addLayout(material_buttons)
@@ -711,7 +775,9 @@ class CreateProjectPage(QWidget):
                 size_text = self._format_file_size(material.stat().st_size)
             except OSError:
                 size_text = "文件不可用"
-            item = QListWidgetItem(f"{material.name}  |  {size_text}")
+            item = QListWidgetItem(f"{material.name}    {size_text}")
+            item.setData(Qt.ItemDataRole.UserRole, str(material))
+            item.setData(Qt.ItemDataRole.UserRole + 1, size_text)
             item.setToolTip(str(material.expanduser().resolve()))
             self.material_list.addItem(item)
 
@@ -742,23 +808,28 @@ class CreateProjectPage(QWidget):
         json_path = self.json_files[row]
         project_key = self._path_key(json_path)
         material_count = len(self.materials_by_project.get(project_key, []))
+        display_name = self.project_names_by_path.get(project_key, json_path.stem)
+        binding_text = (
+            f"该项目当前绑定了 {material_count} 个首次制作材料，绑定会一并从草稿移除。\n"
+            if material_count
+            else "该项目当前没有绑定首次制作材料。\n"
+        )
+        answer = QMessageBox.question(
+            self,
+            "删除项目映射",
+            (
+                f"确认仅从当前创建草稿移除项目“{display_name}”吗？\n\n"
+                f"{binding_text}源 JSON 和源材料都不会被删除。"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
         if material_count:
-            answer = QMessageBox.question(
-                self,
-                "删除项目映射",
-                (
-                    f"项目“{self.project_names_by_path.get(project_key, json_path.stem)}”"
-                    f"当前绑定了 {material_count} 个首次制作材料。\n"
-                    "确认删除 JSON 映射并清除这些材料绑定吗？"
-                ),
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
             logger.info(
                 "Removed project material bindings with JSON mapping; project=%s; count=%d",
-                self.project_names_by_path.get(project_key, json_path.stem),
+                display_name,
                 material_count,
             )
         self.json_files.pop(row)
@@ -780,15 +851,38 @@ class CreateProjectPage(QWidget):
             directory_hint = (
                 "" if directory_name == display_name else f"（目录：{directory_name}）"
             )
-            item = QListWidgetItem(
-                f"{index}  |  {display_name}{directory_hint}"
-                f"  |  材料 {material_count} 个  |  {path.name}"
+            accessible_text = (
+                f"序号 {index}，项目名称 {display_name}{directory_hint}，"
+                f"材料数量 {material_count} 个，原始 JSON {path.name}"
             )
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(0, 48))
+            item.setData(Qt.ItemDataRole.UserRole, str(path))
+            item.setData(Qt.ItemDataRole.UserRole + 1, display_name)
+            item.setData(Qt.ItemDataRole.UserRole + 2, material_count)
+            item.setData(Qt.ItemDataRole.UserRole + 3, path.name)
+            item.setData(Qt.ItemDataRole.AccessibleTextRole, accessible_text)
             item.setToolTip(
                 f"项目名称：{display_name}\n最终目录：{directory_name}\n"
                 f"原始 JSON：{path}\n首次材料：{material_count} 个"
             )
             self.mapping_list.addItem(item)
+            row = _ProjectMappingColumns(
+                str(index),
+                f"{display_name}{directory_hint}",
+                f"{material_count} 个",
+                path.name,
+            )
+            row.setAccessibleName(accessible_text)
+            row.setToolTip(item.toolTip())
+            for label in (
+                row.sequence_label,
+                row.project_label,
+                row.material_label,
+                row.json_label,
+            ):
+                label.setToolTip(item.toolTip())
+            self.mapping_list.setItemWidget(item, row)
         if self.json_files:
             restored_row = next(
                 (
