@@ -81,4 +81,5 @@ $forbiddenDefaultTools = Join-Path $executable.DirectoryName "resources\default_
 if (Test-Path -LiteralPath $forbiddenDefaultTools) {
     throw "Build unexpectedly contains removed default public tools: $forbiddenDefaultTools"
 }
+& (Join-Path $PSScriptRoot "verify_windows_gui_subsystem.ps1") -ExecutablePath $executable.FullName
 Write-Host "Built $($executable.FullName)"
